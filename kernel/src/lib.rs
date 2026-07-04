@@ -19,3 +19,6 @@ pub mod memory;
 
 // Thread model (Phase 5, docs/03_KERNEL_OBJECTS.md §2).
 pub mod thread;
+
+// Fixed-priority scheduler (Phase 6, docs/09_SCHEDULER_MODEL.md).
+pub mod sched;
