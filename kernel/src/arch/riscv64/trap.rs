@@ -18,6 +18,8 @@ pub struct TrapFrame {
     pub sepc: u64,
 }
 
+/// Supervisor exception cause codes (scause, interrupt bit clear).
+const CAUSE_ILLEGAL_INSTRUCTION: u64 = 2;
 const INTERRUPT_BIT: u64 = 1 << 63;
 
 /// Install the trap vector (direct mode). Called once at boot.
@@ -95,9 +97,19 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
     }
 
     match scause {
+        // AXIOM-TRAP-002: illegal instruction is identified, reported in a
+        // structured message, and the system halts safely for now (no
+        // user tasks exist yet to contain it against; from Phase 5+ this
+        // becomes an IllegalInstruction fault, docs/06_FAULT_MODEL.md).
+        CAUSE_ILLEGAL_INSTRUCTION => {
+            report("illegal-instruction", scause, frame);
+            uart::put_str("HALT reason=illegal_instruction phase=trap\n");
+            halt();
+        }
+
         // Unknown trap: controlled panic (AXIOM-TRAP-001 requirement).
-        // Dedicated handling for illegal instruction and the syscall trap
-        // arrives with AXIOM-TRAP-002/-003.
+        // Dedicated handling for the syscall trap arrives with
+        // AXIOM-TRAP-003.
         _ => {
             report("unknown", scause, frame);
             uart::put_str("PANIC kernel=axiomrt reason=unknown_trap phase=trap\n");
