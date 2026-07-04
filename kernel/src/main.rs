@@ -19,11 +19,20 @@ core::arch::global_asm!(include_str!("arch/riscv64/boot.S"));
 #[path = "arch/riscv64/uart.rs"]
 mod uart;
 
+// Trap entry assembly and handler (AXIOM-TRAP-001).
+core::arch::global_asm!(include_str!("arch/riscv64/trap.S"));
+#[path = "arch/riscv64/trap.rs"]
+mod trap;
+
 /// Rust kernel entry, called from the assembly boot entry (`_start` in
 /// arch/riscv64/boot.S). OpenSBI convention: a0 = hart id, a1 = device
 /// tree blob address.
 #[no_mangle]
 pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
+    // Controlled trap entry paths must exist before anything else runs
+    // (AXIOM-TRAP-001, docs/10_TRAP_MODEL.md).
+    trap::init();
+
     // Boot banner (AXIOM-BOOT-003 expected output; checked by the boot
     // smoke test, docs/14_TEST_STRATEGY.md).
     uart::put_str("AxiomRT kernel booted\n");
