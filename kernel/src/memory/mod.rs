@@ -9,6 +9,7 @@
 
 pub mod address;
 pub mod frame;
+pub mod pagetable;
 
 pub use address::{PhysAddr, VirtAddr, PAGE_SIZE};
 

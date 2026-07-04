@@ -179,3 +179,20 @@ Allocated/Mapped ──quarantine──> Quarantined (terminal this boot)
 * Quarantined frames reject every operation within the boot session.
 * All invalid transitions return explicit `FrameError` values — covered
   by negative unit tests. No allocator and no heap exist in this phase.
+
+## 13. Page Table Model (Phase 4, AXIOM-MEM-003)
+
+`kernel/src/memory/pagetable.rs` realizes §5–§6 as a checked model (no
+MMU activation, no satp writes — the hardware Sv39 table added in a later
+phase must refine this model). `PageTable::map` validates, in order:
+alignment → permission structure → kernel-range/USER exclusion (MEM-P1)
+→ virtual-window rules (user pages only in the user window, page zero
+never mappable) → frame ownership (MEM-P2) → frame lifecycle (only
+`Allocated` frames; a `Mapped` frame can never be mapped a second time,
+making sharing structurally impossible) → no double-mapping of a virtual
+page → static capacity (`MAX_MAPPINGS` = 64, no heap).
+
+Failure behavior: every rejected rule returns a distinct `MapError` and
+leaves both the table and the frame unchanged (mapping is atomic, §1).
+`unmap` returns the frame to `Allocated`. Every rule above is covered by
+a positive and a negative unit test.
