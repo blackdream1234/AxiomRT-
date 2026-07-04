@@ -35,7 +35,8 @@ decodes:
 |---|---|---|
 | interrupt bit set | any interrupt | controlled panic (no interrupt sources are enabled in Phase 3) |
 | 2 | illegal instruction | structured trap message, safe halt (AXIOM-TRAP-002) |
-| 8 / 9 | ecall from U-mode / S-mode | syscall stub dispatch (AXIOM-TRAP-003) |
+| 8 | ecall from U-mode | syscall stub dispatch (AXIOM-TRAP-003) |
+| 9 | ecall from S-mode | never delegated here — OpenSBI owns it (see §5); if it arrives, controlled panic |
 | other | unknown trap | structured trap message, controlled panic |
 
 ## 4. Structured Trap Messages (AXIOM-TRAP-002)
@@ -59,8 +60,8 @@ to exactly one of the rows in section 3.
 
 ## 5. Syscall Trap Stub (AXIOM-TRAP-003)
 
-* An `ecall` trap is recognized as the syscall path. The syscall number is
-  taken from `a7`, the result is returned in `a0`
+* An `ecall` trap from **user mode** (scause 8) is the syscall path. The
+  syscall number is taken from `a7`, the result is returned in `a0`
   (docs/04_SYSCALL_MODEL.md ABI), and `sepc` is advanced by 4 so the
   `ecall` is never re-executed.
 * Dispatch goes to `kernel/src/syscall/mod.rs`. Phase 3 is a stub layer:
@@ -68,10 +69,19 @@ to exactly one of the rows in section 3.
   return `ERR_NOT_IMPLEMENTED`; unknown numbers log a controlled error and
   return `ERR_INVALID_SYSCALL`. No syscall logic beyond stub dispatch
   exists (no IPC, no capabilities — Phase 3 boundary).
-* Phase 3 accepts `ecall` from S-mode for testing only, because no user
-  mode exists yet. From Phase 7 on, syscalls come from U-mode and the
-  IllegalSyscall fault path of docs/06_FAULT_MODEL.md applies to the
-  calling task.
+* **Platform fact (verified on QEMU virt + OpenSBI):** `ecall` from
+  S-mode is the SBI call convention. It traps to machine mode and is
+  handled by OpenSBI; `medeleg` does not delegate cause 9 to the kernel
+  (observed `medeleg=0xf4b509`: bit 8 set, bit 9 clear). The kernel
+  therefore cannot invoke its own syscall path from kernel context, and
+  an S-mode ecall arriving at `stvec` can only mean broken delegation —
+  it is treated as a controlled panic.
+* Consequence for verification: the trap entry/exit machinery is proven
+  in Phase 3 by the illegal-instruction path; `syscall::dispatch` is
+  verified by direct invocation. The full U-mode `ecall` → trap →
+  dispatch → `sret` round trip becomes testable in Phase 7 (user mode),
+  where the IllegalSyscall fault path of docs/06_FAULT_MODEL.md applies
+  to the calling task.
 
 ## 6. Fault Model Hook
 

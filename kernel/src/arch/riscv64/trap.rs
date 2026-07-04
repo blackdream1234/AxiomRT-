@@ -9,6 +9,12 @@
 
 use crate::uart;
 
+// Syscall stub dispatch (AXIOM-TRAP-003). Declared here because the trap
+// layer owns the only entry path to syscalls; path keeps the module at
+// its documented location kernel/src/syscall/.
+#[path = "../../syscall/mod.rs"]
+pub mod syscall;
+
 /// Saved register state pushed by `__trap_vector` (trap.S).
 /// Layout contract: `regs[i]` holds general register `x(i+1)`;
 /// `sepc` is the trapped program counter. Must stay in sync with trap.S.
@@ -18,8 +24,21 @@ pub struct TrapFrame {
     pub sepc: u64,
 }
 
+impl TrapFrame {
+    /// Syscall number register a7 (x17).
+    pub fn a7(&self) -> u64 {
+        self.regs[16]
+    }
+    /// Result register a0 (x10).
+    pub fn set_a0(&mut self, value: i64) {
+        self.regs[9] = value as u64;
+    }
+}
+
 /// Supervisor exception cause codes (scause, interrupt bit clear).
 const CAUSE_ILLEGAL_INSTRUCTION: u64 = 2;
+const CAUSE_ECALL_FROM_U: u64 = 8;
+const CAUSE_ECALL_FROM_S: u64 = 9;
 const INTERRUPT_BIT: u64 = 1 << 63;
 
 /// Install the trap vector (direct mode). Called once at boot.
@@ -107,9 +126,28 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
             halt();
         }
 
+        // AXIOM-TRAP-003: syscall trap stub. Recognizes the syscall trap,
+        // dispatches on a7, returns a controlled result in a0. Syscalls
+        // enter only from user mode: ecall from S-mode is an SBI call
+        // handled by OpenSBI in M-mode and never delegated here
+        // (docs/10_TRAP_MODEL.md §5).
+        CAUSE_ECALL_FROM_U => {
+            let result = syscall::dispatch(frame.a7(), frame);
+            frame.set_a0(result);
+            // Resume after the 4-byte ecall instruction, never re-execute it.
+            frame.sepc = frame.sepc.wrapping_add(4);
+        }
+
+        // An S-mode ecall reaching the kernel means trap delegation is
+        // misconfigured (OpenSBI owns this cause). Outside the specified
+        // state space -> controlled panic, never silent continuation.
+        CAUSE_ECALL_FROM_S => {
+            report("smode-ecall-misdelegated", scause, frame);
+            uart::put_str("PANIC kernel=axiomrt reason=smode_ecall_misdelegated phase=trap\n");
+            halt();
+        }
+
         // Unknown trap: controlled panic (AXIOM-TRAP-001 requirement).
-        // Dedicated handling for the syscall trap arrives with
-        // AXIOM-TRAP-003.
         _ => {
             report("unknown", scause, frame);
             uart::put_str("PANIC kernel=axiomrt reason=unknown_trap phase=trap\n");

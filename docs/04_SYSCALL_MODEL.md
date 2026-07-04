@@ -19,9 +19,19 @@ ABI (v0.1): syscall number in `a7`; arguments in `a0..a5`; result code in
 `a0`; secondary return value in `a1`. Any ABI change requires updating this
 document first.
 
-Result codes (shared): `OK`, `ERR_INVALID_SYSCALL`, `ERR_INVALID_CAP`,
-`ERR_INSUFFICIENT_RIGHTS`, `ERR_WRONG_OBJECT_TYPE`, `ERR_INVALID_ARG`,
-`ERR_MSG_TOO_LARGE`, `ERR_PEER_KILLED`, `ERR_NO_PENDING_FAULT`.
+Syscall numbers (a7), fixed by AXIOM-TRAP-003:
+
+```text
+1 sys_yield   2 sys_exit   3 sys_send      4 sys_recv
+5 sys_reply   6 sys_cap_query   7 sys_fault_ack
+```
+
+Result codes (a0, signed): `OK`=0, `ERR_INVALID_SYSCALL`=-1,
+`ERR_INVALID_CAP`=-2, `ERR_INSUFFICIENT_RIGHTS`=-3,
+`ERR_WRONG_OBJECT_TYPE`=-4, `ERR_INVALID_ARG`=-5, `ERR_MSG_TOO_LARGE`=-6,
+`ERR_PEER_KILLED`=-7, `ERR_NO_PENDING_FAULT`=-8, plus the transitional
+`ERR_NOT_IMPLEMENTED`=-9 returned by the Phase 3 stub layer until the
+implementing phase of each syscall lands.
 
 ---
 
