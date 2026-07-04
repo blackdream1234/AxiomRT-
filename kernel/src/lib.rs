@@ -13,3 +13,6 @@
 // builds use the standard library's handler.
 #[cfg(all(not(test), target_arch = "riscv64"))]
 mod panic;
+
+// Memory model (Phase 4, docs/05_MEMORY_MODEL.md).
+pub mod memory;

@@ -142,3 +142,20 @@ These are the formal targets derived from this model:
 
 Test obligations: each property gets at least one negative test (fault
 injection attempting to violate it) in the fault-injection suite.
+
+## 11. Model Constants (Phase 4, AXIOM-MEM-001)
+
+Fixed by `kernel/src/memory/address.rs`:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `PAGE_SIZE` | 4096 | only page/frame size in v0.1 (§9) |
+| `KERNEL_RANGE_START` | `0x8020_0000` | kernel image load base (linker.ld) |
+| `KERNEL_RANGE_END` | `0x8800_0000` | end of kernel-reserved RAM (128 MiB QEMU virt) |
+| `USER_RANGE_START` | `0x0000_1000` | user window start; page zero never mapped |
+| `USER_RANGE_END` | `0x4000_0000` | user window end (exclusive) |
+
+Typed addresses: `VirtAddr` and `PhysAddr` are distinct wrapper types with
+no implicit conversion and no arithmetic operators, so virtual and
+physical addresses cannot be confused at compile time. The kernel and
+user ranges are disjoint by construction (checked by unit test).
