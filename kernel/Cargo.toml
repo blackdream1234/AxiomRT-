@@ -1,0 +1,16 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+description = "AxiomRT microkernel: formally specified safety runtime for RISC-V 64"
+
+# Zero external dependencies (docs/07_CODEX_RULES.md §7).
+[dependencies]
+
+[lib]
+name = "kernel"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"

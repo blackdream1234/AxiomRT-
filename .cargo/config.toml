@@ -1,0 +1,11 @@
+# AxiomRT build configuration (AXIOM-BOOT-001).
+# Default target: RISC-V 64 bare metal (docs/02_KERNEL_BLUEPRINT.md §5).
+# Host-side unit tests override this with an explicit --target.
+
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+[target.riscv64gc-unknown-none-elf]
+# Linker script added by AXIOM-BOOT-002. Only used when linking a binary;
+# `cargo check` does not need it. Run cargo from the repository root.
+rustflags = ["-C", "link-arg=-Tkernel/linker.ld"]

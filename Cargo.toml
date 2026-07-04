@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["kernel"]
+
+# Bare-metal kernel: unwinding is impossible; abort keeps the panic path
+# small and deterministic (docs/06_FAULT_MODEL.md, KernelInvariantViolation).
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
