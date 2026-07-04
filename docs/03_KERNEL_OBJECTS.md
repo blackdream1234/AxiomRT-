@@ -271,3 +271,12 @@ dynamic object creation from user space.
   wraps it arch-independently and rejects contexts with a null resume
   address or null stack at construction. No context switch assembly
   exists in Phase 5.
+* **User image (Phase 7, AXIOM-USER-001):** `kernel/src/user/image.rs`
+  defines `UserImage`: entry point, downward-growing stack region
+  (top + size), and owning `AddressSpaceId` (1:1 with the task in
+  v0.1). Construction is validated: the entry and the whole stack
+  region must lie inside the user virtual window
+  (docs/05_MEMORY_MODEL.md §3/§11) and the stack must be page-aligned
+  and at least one page — a descriptor violating these cannot exist.
+  Images are static boot-time descriptors in v0.1. No user-mode jump
+  in this task.

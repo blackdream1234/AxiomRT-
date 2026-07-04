@@ -33,6 +33,12 @@ core::arch::global_asm!(include_str!("arch/riscv64/trap.S"));
 #[path = "arch/riscv64/trap.rs"]
 mod trap;
 
+// User task layer (Phase 7). The image model is target-independent and
+// unit-tested on the host. Transitional allowance: the model is
+// consumed on target by the user-mode transition (AXIOM-USER-002).
+#[allow(dead_code, unused_imports)]
+mod user;
+
 /// Rust kernel entry, called from the assembly boot entry (`_start` in
 /// arch/riscv64/boot.S). OpenSBI convention: a0 = hart id, a1 = device
 /// tree blob address.
