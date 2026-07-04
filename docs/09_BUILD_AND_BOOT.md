@@ -41,3 +41,38 @@ cargo check
 Expected state after AXIOM-BOOT-001: `cargo check` completes with no errors
 for target `riscv64gc-unknown-none-elf`. Linking a bootable image requires
 the boot entry and linker script (AXIOM-BOOT-002).
+
+## Boot Path (AXIOM-BOOT-002)
+
+Boot chain on the QEMU `virt` machine:
+
+```text
+QEMU reset → OpenSBI (machine mode) → _start at 0x80200000 (supervisor mode)
+           → set stack → clear .bss → kernel_main → halt loop
+```
+
+Files:
+
+* `kernel/src/arch/riscv64/boot.S` — assembly boot entry `_start`:
+  parks all harts except hart 0 (single-hart v0.1), sets the boot stack
+  (`__stack_top` from the linker script), clears `.bss`, and calls
+  `kernel_main(hartid, dtb)`. It never falls through: any return path
+  parks the hart in a `wfi` loop.
+* `kernel/linker.ld` — places the image at `0x80200000` (the standard
+  OpenSBI supervisor payload address on QEMU virt), keeps `.text.boot`
+  first so `_start` is the entry point, defines `__bss_start`/`__bss_end`
+  and a 64 KiB boot stack region. Static layout, no heap.
+* `kernel/src/main.rs` — includes the boot assembly via `global_asm!` and
+  defines `kernel_main`, which does **not** start a scheduler: it enters a
+  halt loop (Phase 2 boundary).
+
+Link a bootable ELF from the repository root:
+
+```sh
+cargo build            # debug
+cargo build --release  # release image used by the run script
+```
+
+The linker script is passed through `.cargo/config.toml`
+(`-C link-arg=-Tkernel/linker.ld`); build commands must run from the
+repository root so the relative path resolves.

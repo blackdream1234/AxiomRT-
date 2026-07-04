@@ -11,12 +11,17 @@
 // The library provides the panic handler for the bare-metal build.
 extern crate kernel;
 
-/// Rust kernel entry, called from the assembly boot entry
-/// (added by AXIOM-BOOT-002). OpenSBI convention: a0 = hart id,
-/// a1 = device tree blob address.
+// Assembly boot entry (AXIOM-BOOT-002): sets the stack, clears .bss,
+// then calls kernel_main. See docs/09_BUILD_AND_BOOT.md.
+core::arch::global_asm!(include_str!("arch/riscv64/boot.S"));
+
+/// Rust kernel entry, called from the assembly boot entry (`_start` in
+/// arch/riscv64/boot.S). OpenSBI convention: a0 = hart id, a1 = device
+/// tree blob address.
 #[no_mangle]
 pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
-    // Phase 2: no scheduler. Halt loop only.
+    // Phase 2: no scheduler is started. Halt loop only
+    // (AXIOM-BOOT-002 expected behavior).
     loop {
         core::hint::spin_loop();
     }
