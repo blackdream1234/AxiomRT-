@@ -5,9 +5,11 @@
 //! Phase 5 scope: thread objects and states only. No context switching,
 //! no scheduler integration (Phase 6), no user-mode entry (Phase 7).
 
+pub mod context;
 pub mod id;
 pub mod state;
 
+pub use context::ThreadContext;
 pub use id::ThreadId;
 pub use state::{is_legal_transition, ThreadState};
 

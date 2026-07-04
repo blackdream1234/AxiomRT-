@@ -260,3 +260,14 @@ dynamic object creation from user space.
   Ready. Invalid transitions return an explicit `IllegalTransition`
   error and leave the thread unchanged. No context switching in this
   task.
+* **Thread context (Phase 5, AXIOM-THREAD-002):**
+  `kernel/src/arch/riscv64/context.rs` defines `ArchContext`, the
+  `#[repr(C)]` callee-saved register set (ra, sp, s0..s11 — fixed
+  offsets for the future switch assembly). Documented assumptions:
+  switches happen at call boundaries (caller-saved registers are dead
+  by the ABI); full interrupted-thread state lives in the trap frame,
+  a distinct structure; no FP state (FP off in kernel); satp joins the
+  context only when the MMU is activated. `kernel/src/thread/context.rs`
+  wraps it arch-independently and rejects contexts with a null resume
+  address or null stack at construction. No context switch assembly
+  exists in Phase 5.
