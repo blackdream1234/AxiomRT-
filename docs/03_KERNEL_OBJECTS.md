@@ -248,3 +248,15 @@ Kernel ──creates──> FaultEvent ──delivered──> supervisor Thread
 
 In v0.1 all objects are created at boot from static pools; there is no
 dynamic object creation from user space.
+
+## Implementation Notes (kept current per phase)
+
+* **Thread (Phase 5, AXIOM-THREAD-001):** realized in
+  `kernel/src/thread/` — `ThreadId` (id.rs), `ThreadState` and the
+  complete legal transition relation (state.rs), `Thread` skeleton
+  (mod.rs). The relation makes Killed terminal, keeps Faulted out of
+  execution permanently (Restart creates a fresh thread,
+  docs/06_FAULT_MODEL.md invariant 3), and admits Running only from
+  Ready. Invalid transitions return an explicit `IllegalTransition`
+  error and leave the thread unchanged. No context switching in this
+  task.

@@ -16,3 +16,6 @@ mod panic;
 
 // Memory model (Phase 4, docs/05_MEMORY_MODEL.md).
 pub mod memory;
+
+// Thread model (Phase 5, docs/03_KERNEL_OBJECTS.md §2).
+pub mod thread;
