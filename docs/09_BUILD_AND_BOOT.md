@@ -76,3 +76,47 @@ cargo build --release  # release image used by the run script
 The linker script is passed through `.cargo/config.toml`
 (`-C link-arg=-Tkernel/linker.ld`); build commands must run from the
 repository root so the relative path resolves.
+
+## Boot Banner (AXIOM-BOOT-003)
+
+`kernel/src/arch/riscv64/uart.rs` drives the NS16550A-compatible UART of
+the QEMU `virt` machine at `0x1000_0000` (output only, polled, no
+interrupts, no buffering). Device memory is kernel-only in v0.1
+(docs/05_MEMORY_MODEL.md §7). The MMIO access is the single justified
+`unsafe` region of Phase 2 and carries a SAFETY comment per
+docs/07_CODEX_RULES.md §6.
+
+On entry, `kernel_main` prints exactly:
+
+```text
+AxiomRT kernel booted
+arch=riscv64
+phase=boot
+```
+
+then enters the halt loop. No scheduler and no heap are added.
+
+## Running in QEMU (AXIOM-BOOT-004)
+
+Exact command (wrapped by the script):
+
+```sh
+qemu-system-riscv64 \
+    -machine virt \
+    -smp 1 \
+    -m 128M \
+    -nographic \
+    -bios default \
+    -kernel target/riscv64gc-unknown-none-elf/release/kernel
+```
+
+Or simply, from the repository root:
+
+```sh
+./scripts/run_qemu.sh
+```
+
+The script builds the release kernel first, then launches QEMU.
+`-bios default` uses the OpenSBI firmware bundled with QEMU; OpenSBI prints
+its own banner first, then jumps to the kernel, which prints the boot
+banner above. Exit QEMU with `Ctrl-A` then `x`.
