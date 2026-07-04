@@ -8,6 +8,7 @@
 //! only), no shared memory, no device mappings for user tasks.
 
 pub mod address;
+pub mod frame;
 
 pub use address::{PhysAddr, VirtAddr, PAGE_SIZE};
 

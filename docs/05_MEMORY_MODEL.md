@@ -159,3 +159,23 @@ Typed addresses: `VirtAddr` and `PhysAddr` are distinct wrapper types with
 no implicit conversion and no arithmetic operators, so virtual and
 physical addresses cannot be confused at compile time. The kernel and
 user ranges are disjoint by construction (checked by unit test).
+
+## 12. Frame Lifecycle Model (Phase 4, AXIOM-MEM-002)
+
+`kernel/src/memory/frame.rs` realizes §4 as a typed state machine:
+
+```text
+Free ──allocate(owner)──> Allocated ──mark_mapped──> Mapped
+  ^                          │  ^                      │
+  └────────free()────────────┘  └────mark_unmapped────┘
+Allocated/Mapped ──quarantine──> Quarantined (terminal this boot)
+```
+
+* `FrameOwner` = FreePool | Kernel | AddressSpace(id) — exactly one owner
+  at any time (MEM-P4); ownership changes only through `free()`.
+* Freeing a mapped frame is rejected (`StillMapped`): no dangling
+  mappings can exist in the model.
+* `free()` models the mandatory scrub point (no data remanence, §4).
+* Quarantined frames reject every operation within the boot session.
+* All invalid transitions return explicit `FrameError` values — covered
+  by negative unit tests. No allocator and no heap exist in this phase.
