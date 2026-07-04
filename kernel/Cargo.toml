@@ -14,3 +14,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "kernel"
 path = "src/main.rs"
+
+# Host-run integration test suites live in the repository-level tests/
+# directory (docs/14_TEST_STRATEGY.md). Run with an explicit host target:
+#   cargo test --target x86_64-unknown-linux-gnu -p kernel
+[[test]]
+name = "scheduler_tests"
+path = "../tests/scheduler_tests.rs"

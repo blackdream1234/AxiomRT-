@@ -50,3 +50,34 @@ Run from the repository root:
 
 This test is the Phase 2 gate: Phase 3 (trap layer) may not start until it
 passes.
+
+## Host Unit and Integration Tests (Phases 4+)
+
+Pure-logic kernel modules (memory model, thread model, scheduler, later
+IPC and capabilities) are tested on the host — no hardware dependency,
+fully deterministic. Run from the repository root:
+
+```sh
+cargo test --target x86_64-unknown-linux-gnu -p kernel
+```
+
+(The explicit `--target` overrides the default bare-metal target in
+`.cargo/config.toml`; unit tests live next to their modules, integration
+suites live in `tests/` and are wired as `[[test]]` targets of the
+kernel crate.)
+
+## Scheduler Tests (AXIOM-SCHED-002)
+
+Suite: `tests/scheduler_tests.rs` — drives `FixedPriorityScheduler`
+together with the Thread state machine (the readiness authority,
+docs/09_SCHEDULER_MODEL.md §4). Mandatory cases:
+
+* highest-priority task selected (SCHED-P1)
+* killed task not selected — including with a deliberately stale ready
+  queue entry (SCHED-P2 defense in depth)
+* blocked task not selected
+* faulted task not selected
+* equal priority uses the deterministic FIFO rule, reproducibly
+  (SCHED-P3)
+
+All cases must pass with no hardware dependency before Phase 7.
