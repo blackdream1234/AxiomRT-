@@ -17,12 +17,17 @@ pub mod syscall;
 
 /// Saved register state pushed by `__trap_vector` (trap.S).
 /// Layout contract: `regs[i]` holds general register `x(i+1)`;
-/// `sepc` is the trapped program counter. Must stay in sync with trap.S.
+/// `sepc` is the trapped program counter; `sstatus` carries the
+/// pre-trap privilege in SPP. Must stay in sync with trap.S.
 #[repr(C)]
 pub struct TrapFrame {
     pub regs: [u64; 31],
     pub sepc: u64,
+    pub sstatus: u64,
 }
+
+/// sstatus.SPP: privilege level the trap came from (0 = user).
+const SSTATUS_SPP: u64 = 1 << 8;
 
 impl TrapFrame {
     /// Syscall number register a7 (x17).
@@ -33,6 +38,10 @@ impl TrapFrame {
     pub fn set_a0(&mut self, value: i64) {
         self.regs[9] = value as u64;
     }
+    /// True if the trap was taken from user mode (AXIOM-USER-002).
+    pub fn from_user(&self) -> bool {
+        self.sstatus & SSTATUS_SPP == 0
+    }
 }
 
 /// Supervisor exception cause codes (scause, interrupt bit clear).
@@ -40,6 +49,48 @@ const CAUSE_ILLEGAL_INSTRUCTION: u64 = 2;
 const CAUSE_ECALL_FROM_U: u64 = 8;
 const CAUSE_ECALL_FROM_S: u64 = 9;
 const INTERRUPT_BIT: u64 = 1 << 63;
+
+// ---------------------------------------------------------------------
+// User fault containment (AXIOM-USER-002, docs/10_USER_MODE.md §4).
+//
+// Before the kernel enters user mode it registers a continuation
+// (kernel resume point + kernel stack). A faulting user task is then
+// *contained*: the trap frame is redirected to the continuation in
+// S-mode instead of resuming the user task, and the kernel survives.
+// Zero means "no user session active" — user faults without a
+// continuation are a kernel invariant violation (cannot happen: the
+// only path to user mode registers the continuation first).
+
+use core::sync::atomic::{AtomicU64, Ordering};
+
+static USER_FAULT_CONT_PC: AtomicU64 = AtomicU64::new(0);
+static USER_FAULT_CONT_SP: AtomicU64 = AtomicU64::new(0);
+
+/// Register the kernel continuation used when a user task must be
+/// terminated after a fault. Called by the user layer before sret to U.
+pub fn set_user_fault_continuation(pc: u64, sp: u64) {
+    USER_FAULT_CONT_PC.store(pc, Ordering::SeqCst);
+    USER_FAULT_CONT_SP.store(sp, Ordering::SeqCst);
+}
+
+/// Contain a faulting user task: stop it (it never resumes) and
+/// redirect execution to the registered kernel continuation.
+/// Returns false if no continuation is registered (kernel must halt).
+fn contain_user_fault(frame: &mut TrapFrame, reason: &str) -> bool {
+    let pc = USER_FAULT_CONT_PC.load(Ordering::SeqCst);
+    let sp = USER_FAULT_CONT_SP.load(Ordering::SeqCst);
+    if pc == 0 || sp == 0 {
+        return false;
+    }
+    uart::put_str("CONTAIN scope=user reason=");
+    uart::put_str(reason);
+    uart::put_str(" action=terminate_task kernel=alive\n");
+    // Redirect: resume in S-mode at the continuation, on a kernel stack.
+    frame.sepc = pc;
+    frame.regs[1] = sp; // x2 slot (destination stack)
+    frame.sstatus |= SSTATUS_SPP;
+    true
+}
 
 /// Install the trap vector (direct mode). Called once at boot.
 pub fn init() {
@@ -116,12 +167,16 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
     }
 
     match scause {
-        // AXIOM-TRAP-002: illegal instruction is identified, reported in a
-        // structured message, and the system halts safely for now (no
-        // user tasks exist yet to contain it against; from Phase 5+ this
-        // becomes an IllegalInstruction fault, docs/06_FAULT_MODEL.md).
+        // AXIOM-TRAP-002 / AXIOM-USER-002: illegal instruction is
+        // identified and reported. From user mode it is *contained*
+        // (IllegalInstruction fault, docs/06_FAULT_MODEL.md): the task
+        // is terminated and the kernel continues. From kernel mode it
+        // remains a safe halt (kernel invariant violation).
         CAUSE_ILLEGAL_INSTRUCTION => {
             report("illegal-instruction", scause, frame);
+            if frame.from_user() && contain_user_fault(frame, "illegal_instruction") {
+                return;
+            }
             uart::put_str("HALT reason=illegal_instruction phase=trap\n");
             halt();
         }
@@ -147,9 +202,15 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
             halt();
         }
 
-        // Unknown trap: controlled panic (AXIOM-TRAP-001 requirement).
+        // Any other exception from user mode (page fault, access
+        // fault, misaligned access, ...) is a user fault: contained,
+        // task terminated, kernel survives (AXIOM-USER-002).
+        // From kernel mode: controlled panic (AXIOM-TRAP-001).
         _ => {
             report("unknown", scause, frame);
+            if frame.from_user() && contain_user_fault(frame, "exception") {
+                return;
+            }
             uart::put_str("PANIC kernel=axiomrt reason=unknown_trap phase=trap\n");
             halt();
         }

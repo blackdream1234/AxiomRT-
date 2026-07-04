@@ -55,11 +55,10 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     uart::put_str("arch=riscv64\n");
     uart::put_str("phase=boot\n");
 
-    // Phase 2: no scheduler is started. Halt loop only
-    // (AXIOM-BOOT-002 expected behavior).
-    loop {
-        core::hint::spin_loop();
-    }
+    // Phase 7 (AXIOM-USER-002): run the first user task outside kernel
+    // privilege. Never returns: the user session ends in the registered
+    // kernel continuation (docs/10_USER_MODE.md).
+    user::first_user_task_demo()
 }
 
 /// Host stub: the kernel binary has no meaning off-target. It exists
