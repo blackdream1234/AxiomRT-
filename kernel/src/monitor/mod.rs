@@ -8,5 +8,7 @@
 //! the system through the serial port only in v0.1.
 
 pub mod event;
+pub mod serial;
 
 pub use event::{KernelPhase, MonitorEvent, MonitorEventType};
+pub use serial::{export, render, EventLine, LINE_CAPACITY};
