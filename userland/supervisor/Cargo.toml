@@ -1,0 +1,21 @@
+[package]
+name = "supervisor"
+version = "0.1.0"
+edition = "2021"
+description = "AxiomRT trusted user-space supervisor: fault recovery policy (AXIOM-FAULT-003)"
+
+# Standalone crate (not a workspace member): userland services are built
+# and tested separately from the kernel. The only dependency is the
+# kernel model library, by path.
+#   cargo test --manifest-path userland/supervisor/Cargo.toml \
+#              --target x86_64-unknown-linux-gnu
+[dependencies]
+kernel = { path = "../../kernel" }
+
+# Opt out of the repository root workspace: userland services build
+# independently of the kernel workspace.
+[workspace]
+
+[lib]
+name = "supervisor"
+path = "src/lib.rs"

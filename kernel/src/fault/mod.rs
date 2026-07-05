@@ -9,8 +9,13 @@
 //! AXIOM-FAULT-003 adds the supervisor notification path.
 
 pub mod event;
+pub mod wire;
 
 pub use event::{EventState, FaultEvent, FaultType, IllegalEventTransition, Severity};
+pub use wire::{
+    acknowledge, decode, default_decision, encode, is_valid_recovery, notify_supervisor,
+    AckError, DecodeError, FaultReport, NotifyOutcome, RecoveryDecision, KERNEL_SENDER,
+};
 
 use crate::thread::{Thread, ThreadState};
 

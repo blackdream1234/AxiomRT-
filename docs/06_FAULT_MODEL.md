@@ -193,3 +193,18 @@ Common logging fields for every fault event: `event_id`, `timestamp`,
   realizes the containment side for real U-mode faults
   (docs/10_USER_MODE.md §4); Phase 10 links it to structured events and
   the supervisor in AXIOM-FAULT-003.
+* **Supervisor notification (Phase 10, AXIOM-FAULT-003):**
+  `kernel/src/fault/wire.rs` + `userland/supervisor/`. Fault events
+  travel over a dedicated fault-channel endpoint using ordinary
+  bounded, copy-based IPC: the kernel encodes the event (fixed 30-byte
+  wire format, kernel sender identity, derived severity — decode
+  rejects forged senders and severity mismatches) and `notify_supervisor`
+  parks or hands it over; a full channel falls back to the documented
+  default policy (`default_decision`, the bold defaults above).
+  The supervisor (`userland/supervisor`, `no_std` service crate)
+  receives **only** through `recv_checked` with a Receive capability
+  for the channel — no capability, no events, no bypass (tested) —
+  decides via its policy (`decide`), and the loop closes with
+  `acknowledge`, which validates the decision against the fault type
+  (KernelInvariantViolation admits none) and the Delivered state
+  (double-ack → `ERR_NO_PENDING_FAULT` at the syscall layer).
