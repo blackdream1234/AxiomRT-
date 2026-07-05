@@ -14,21 +14,21 @@
 | [07_CODEX_RULES.md](07_CODEX_RULES.md) | AXIOM-DOC-008 | AI assistant rules, task format, review checklist |
 | [08_PHASE_0_GATE.md](08_PHASE_0_GATE.md) | AXIOM-DOC-009 | Phase 0 completion gate checklist |
 
-## Later-phase documents (created by their phases)
+## Later-phase documents (all created)
 
 | Document | Phase | Content |
 |---|---|---|
-| 09_BUILD_AND_BOOT.md | Phase 2 | Build instructions, QEMU boot, run scripts |
-| 10_TRAP_MODEL.md | Phase 3 | Trap vector, exception decoding, syscall trap |
-| 09_SCHEDULER_MODEL.md | Phase 6 | Fixed-priority scheduler model |
-| 10_USER_MODE.md | Phase 7 | User mode transition |
-| 08_IPC_MODEL.md | Phase 8 | Synchronous copy-based IPC |
-| 06_CAPABILITY_MODEL.md | Phase 9 | Capability table and rights checking |
-| 11_RUNTIME_MONITORING.md | Phase 11 | Structured runtime events |
-| 11_VERIFICATION_PLAN.md | Phase 12 | Formal proof plan (Coq starters) |
-| 14_TEST_STRATEGY.md | Phase 2+ | Test strategy (grows with each phase) |
-| INDUSTRIAL_EVALUATION_KIT.md | Phase 13 | Evaluation kit definition |
-| DEMO_SCENARIO.md | Phase 13 | Fault containment demo scenario |
+| [09_BUILD_AND_BOOT.md](09_BUILD_AND_BOOT.md) | Phase 2 | Build instructions, QEMU boot, run scripts |
+| [10_TRAP_MODEL.md](10_TRAP_MODEL.md) | Phase 3 | Trap vector, exception decoding, syscall trap |
+| [09_SCHEDULER_MODEL.md](09_SCHEDULER_MODEL.md) | Phase 6 | Fixed-priority scheduler model |
+| [10_USER_MODE.md](10_USER_MODE.md) | Phase 7 | User mode transition and fault containment |
+| [08_IPC_MODEL.md](08_IPC_MODEL.md) | Phase 8 | Synchronous copy-based IPC |
+| [06_CAPABILITY_MODEL.md](06_CAPABILITY_MODEL.md) | Phase 9 | Capability table and rights checking |
+| [11_RUNTIME_MONITORING.md](11_RUNTIME_MONITORING.md) | Phase 11 | Structured runtime events |
+| [11_VERIFICATION_PLAN.md](11_VERIFICATION_PLAN.md) | Phase 12 | Formal proof plan (Coq starters) |
+| [14_TEST_STRATEGY.md](14_TEST_STRATEGY.md) | Phase 2+ | Test strategy (grows with each phase) |
+| [INDUSTRIAL_EVALUATION_KIT.md](INDUSTRIAL_EVALUATION_KIT.md) | Phase 13 | Evaluation kit definition |
+| [DEMO_SCENARIO.md](DEMO_SCENARIO.md) | Phase 13 | Fault containment demo scenario |
 
 File names above follow the task pack verbatim (numbering overlaps are
 intentional and preserved).

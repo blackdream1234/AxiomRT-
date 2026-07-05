@@ -27,10 +27,15 @@ docs/01_SCOPE_AND_NON_GOALS.md.
 
 ## 3. Current phase
 
-**Phase 1 — Repository Skeleton** (structure and documentation only).
+**v0.1 prototype — Phases 0–13 executed** (evaluation kit assembled).
 
-Phase 0 (Kernel Blueprint) is complete and gated by docs/08_PHASE_0_GATE.md.
-The first kernel code begins in Phase 2 (Boot Kernel in QEMU).
+The kernel boots on QEMU/OpenSBI, runs a user task at U privilege,
+answers syscalls through the trap path, denies capability-less IPC, and
+contains user faults while surviving. Model layers (memory, threads,
+scheduler, IPC, capabilities, fault recovery, monitoring) are
+host-tested; Coq starter models compile with core theorems proven.
+Known limitations (MMU not yet activated, single task on target):
+docs/INDUSTRIAL_EVALUATION_KIT.md §9. Demo: docs/DEMO_SCENARIO.md.
 
 ## 4. Target platform
 
