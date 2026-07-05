@@ -29,3 +29,7 @@ path = "../tests/ipc_tests.rs"
 [[test]]
 name = "capability_tests"
 path = "../tests/capability_tests.rs"
+
+[[test]]
+name = "ipc_capability_tests"
+path = "../tests/ipc_capability_tests.rs"

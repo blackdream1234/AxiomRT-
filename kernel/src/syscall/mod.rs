@@ -49,17 +49,66 @@ fn stub(name: &str) -> i64 {
     ERR_NOT_IMPLEMENTED
 }
 
+// ---------------------------------------------------------------------
+// Capability enforcement at the syscall boundary (AXIOM-CAP-003).
+//
+// sys_send / sys_recv resolve their endpoint argument (a0 = capability
+// index) through the caller's capability table BEFORE any IPC state is
+// touched. v0.1 boot state mints no capabilities for the boot task, so
+// these syscalls fail closed with ERR_INVALID_CAP through the real
+// lookup path — never through a shortcut. Fault event creation for
+// InvalidCapability lands with Phase 10 (docs/06_FAULT_MODEL.md); the
+// CAP_DENIED line below is its monitoring precursor.
+
+use kernel::caps::{CapError, CapTable, ObjectType, Rights};
+
+/// The boot task's capability table (v0.1: empty — least privilege by
+/// default; capabilities are minted per task description in Phase 10+).
+static BOOT_CAP_TABLE: CapTable = CapTable::new();
+
+fn map_cap_error(err: CapError) -> i64 {
+    match err {
+        CapError::InvalidIndex | CapError::EmptySlot => ERR_INVALID_CAP,
+        CapError::WrongObjectType => ERR_WRONG_OBJECT_TYPE,
+        CapError::InsufficientRights => ERR_INSUFFICIENT_RIGHTS,
+        // SlotOccupied is an insertion-time error; a lookup can never
+        // produce it. Mapped defensively, never expected.
+        CapError::SlotOccupied => ERR_INVALID_CAP,
+    }
+}
+
+/// Capability gate for the IPC syscalls: a0 = capability index.
+fn ipc_capability_gate(name: &str, cap_index: u64, required: Rights) -> i64 {
+    match BOOT_CAP_TABLE.lookup(cap_index as usize, ObjectType::Endpoint, required) {
+        Ok(_) => {
+            // Rendezvous integration (endpoint registry + blocking via
+            // the scheduler) completes in Phase 10 when tasks and their
+            // endpoints exist. Unreachable in v0.1 boot state (no
+            // capabilities minted).
+            stub(name)
+        }
+        Err(err) => {
+            uart::put_str("CAP_DENIED syscall=");
+            uart::put_str(name);
+            uart::put_str(" reason=no_valid_capability result=ERR\n");
+            map_cap_error(err)
+        }
+    }
+}
+
 /// Dispatch a recognized syscall trap. Phase 3: every known syscall is
 /// acknowledged with a structured line and `ERR_NOT_IMPLEMENTED`; an
 /// unknown number logs a controlled error and returns
 /// `ERR_INVALID_SYSCALL` (docs/04_SYSCALL_MODEL.md, forbidden/unknown
 /// syscall rule). The kernel never panics on a bad syscall number.
-pub fn dispatch(number: u64, _frame: &mut TrapFrame) -> i64 {
+pub fn dispatch(number: u64, frame: &mut TrapFrame) -> i64 {
     match number {
         SYS_YIELD => stub("sys_yield"),
         SYS_EXIT => stub("sys_exit"),
-        SYS_SEND => stub("sys_send"),
-        SYS_RECV => stub("sys_recv"),
+        // AXIOM-CAP-003: IPC syscalls are capability-gated. a0 carries
+        // the endpoint capability index (docs/04_SYSCALL_MODEL.md).
+        SYS_SEND => ipc_capability_gate("sys_send", frame.regs[9], Rights::SEND),
+        SYS_RECV => ipc_capability_gate("sys_recv", frame.regs[9], Rights::RECEIVE),
         SYS_REPLY => stub("sys_reply"),
         SYS_CAP_QUERY => stub("sys_cap_query"),
         SYS_FAULT_ACK => stub("sys_fault_ack"),

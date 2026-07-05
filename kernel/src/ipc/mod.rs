@@ -112,6 +112,63 @@ pub fn recv(ep: &mut Endpoint, receiver: ThreadId) -> Result<RecvOutcome, IpcErr
     }
 }
 
+// ---------------------------------------------------------------------
+// Capability-checked entry points (AXIOM-CAP-003).
+//
+// The only lawful path from a syscall to the rendezvous model. The
+// capability must (a) pass the table lookup with the required right and
+// (b) reference *this* endpoint — holding Send on endpoint A grants
+// nothing on endpoint B.
+
+use crate::caps::{CapError, CapTable, ObjectType, Rights};
+
+/// Failure behavior of checked IPC (docs/06_CAPABILITY_MODEL.md §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpcCapError {
+    /// Capability lookup failed → InvalidCapability fault path
+    /// (CAP_DENIED / IPC_DENIED event, docs/06_FAULT_MODEL.md).
+    Cap(CapError),
+    /// The capability is valid but references a different endpoint.
+    WrongEndpoint,
+    /// Rendezvous-level error (Busy / AlreadyWaiting).
+    Ipc(IpcError),
+}
+
+/// sys_send path: requires an Endpoint capability with the Send right
+/// that references `ep`. The endpoint is never touched on failure.
+pub fn send_checked(
+    table: &CapTable,
+    cap_index: usize,
+    ep: &mut Endpoint,
+    sender: ThreadId,
+    msg: Message,
+) -> Result<SendOutcome, IpcCapError> {
+    let obj = table
+        .lookup(cap_index, ObjectType::Endpoint, Rights::SEND)
+        .map_err(IpcCapError::Cap)?;
+    if obj.object_id != ep.id().0 {
+        return Err(IpcCapError::WrongEndpoint);
+    }
+    send(ep, sender, msg).map_err(IpcCapError::Ipc)
+}
+
+/// sys_recv path: requires an Endpoint capability with the Receive
+/// right that references `ep`.
+pub fn recv_checked(
+    table: &CapTable,
+    cap_index: usize,
+    ep: &mut Endpoint,
+    receiver: ThreadId,
+) -> Result<RecvOutcome, IpcCapError> {
+    let obj = table
+        .lookup(cap_index, ObjectType::Endpoint, Rights::RECEIVE)
+        .map_err(IpcCapError::Cap)?;
+    if obj.object_id != ep.id().0 {
+        return Err(IpcCapError::WrongEndpoint);
+    }
+    recv(ep, receiver).map_err(IpcCapError::Ipc)
+}
+
 /// Cancel a parked party (thread killed while blocked). The kernel
 /// unblocks the peer with ERR_PEER_KILLED at the syscall layer.
 pub fn cancel(ep: &mut Endpoint, tid: ThreadId) -> CancelOutcome {

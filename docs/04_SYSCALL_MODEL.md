@@ -33,6 +33,15 @@ Result codes (a0, signed): `OK`=0, `ERR_INVALID_SYSCALL`=-1,
 `ERR_NOT_IMPLEMENTED`=-9 returned by the Phase 3 stub layer until the
 implementing phase of each syscall lands.
 
+Capability enforcement status (Phase 9, AXIOM-CAP-003): `sys_send` and
+`sys_recv` resolve their endpoint argument (a0 = capability index)
+through the caller's capability table before any IPC state is touched
+— checks in the fixed order of docs/06_CAPABILITY_MODEL.md §4, plus the
+endpoint-binding check (the capability must reference the target
+endpoint). The v0.1 boot state mints no capabilities, so these syscalls
+fail closed with `ERR_INVALID_CAP` and a `CAP_DENIED` serial event.
+Fault event creation for InvalidCapability lands with Phase 10.
+
 ---
 
 ## sys_yield

@@ -76,7 +76,22 @@ party to Blocked):
 Determinism: the outcome is a pure function of (endpoint state,
 operation); there is no timing dependence and no hidden queue order.
 
-## 5. Explicitly Absent in v0.1
+## 5. Capability-Checked Entry Points (AXIOM-CAP-003)
+
+`send_checked` / `recv_checked` (`kernel/src/ipc/mod.rs`) are the only
+lawful path from a syscall to the rendezvous model:
+
+1. capability table lookup (Endpoint type, Send or Receive right,
+   docs/06_CAPABILITY_MODEL.md §4);
+2. endpoint binding: the capability's object id must equal the target
+   endpoint's id — Send on endpoint A grants nothing on endpoint B;
+3. only then the rendezvous operation of §4 runs.
+
+Every failure (`IpcCapError`) leaves the endpoint state untouched.
+IPC without a capability fails; IPC with a valid capability succeeds
+(tests/ipc_capability_tests.rs).
+
+## 6. Explicitly Absent in v0.1
 
 * shared memory transfer of any kind
 * asynchronous / buffered sends, sender or receiver queues
