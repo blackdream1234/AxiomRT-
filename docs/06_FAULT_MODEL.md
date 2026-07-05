@@ -182,3 +182,14 @@ Common logging fields for every fault event: `event_id`, `timestamp`,
   Delivered → Acknowledged; skips, rewinds, and double-acknowledge are
   explicit `IllegalEventTransition` errors (unit-tested). No recovery
   policy is implemented in this task.
+* **Handling policy (Phase 10, AXIOM-FAULT-002):**
+  `kernel/src/fault/mod.rs::handle` is a total function over
+  (scope, fault type, thread state): a user fault moves the thread to
+  Faulted and returns `Contained` (kernel unaffected; only the faulting
+  thread is touched — a critical task stays Ready and is still selected
+  by the scheduler, unit-tested); kernel-scope faults, user-scope
+  KernelInvariantViolation, and faulting a non-live thread all return
+  `KernelPanic` (caller halts safely). The on-target trap layer already
+  realizes the containment side for real U-mode faults
+  (docs/10_USER_MODE.md §4); Phase 10 links it to structured events and
+  the supervisor in AXIOM-FAULT-003.
