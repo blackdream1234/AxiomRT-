@@ -11,6 +11,8 @@
 
 pub mod capability;
 pub mod rights;
+pub mod table;
 
 pub use capability::{Capability, ObjectRef, ObjectType};
 pub use rights::Rights;
+pub use table::{CapError, CapTable, CAP_TABLE_SLOTS};
