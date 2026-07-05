@@ -25,3 +25,6 @@ pub mod sched;
 
 // Synchronous IPC (Phase 8, docs/08_IPC_MODEL.md).
 pub mod ipc;
+
+// Capability-based access control (Phase 9, docs/06_CAPABILITY_MODEL.md).
+pub mod caps;
