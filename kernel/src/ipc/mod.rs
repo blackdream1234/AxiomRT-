@@ -15,3 +15,116 @@ pub mod message;
 
 pub use endpoint::{Endpoint, EndpointId, EndpointState};
 pub use message::{Message, MessageError, MessageHeader, MSG_MAX_BYTES};
+
+use crate::thread::ThreadId;
+
+/// Explicit failure behavior for rendezvous operations
+/// (docs/08_IPC_MODEL.md §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpcError {
+    /// Another sender (or receiver) already waits on this endpoint:
+    /// bounded, no queues in v0.1.
+    Busy,
+    /// The caller is already the parked party on this endpoint.
+    AlreadyWaiting,
+}
+
+/// Outcome of a send operation (AXIOM-IPC-002).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendOutcome {
+    /// No receiver present: the sender must block
+    /// (thread → Blocked, docs/03_KERNEL_OBJECTS.md §2).
+    Blocked,
+    /// A receiver was waiting: message delivered, both continue.
+    Delivered { to: ThreadId, msg: Message },
+}
+
+/// Outcome of a receive operation (AXIOM-IPC-002).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecvOutcome {
+    /// No sender present: the receiver must block.
+    Blocked,
+    /// A sender was waiting: message received, unblock that sender.
+    Received { msg: Message, unblock: ThreadId },
+}
+
+/// Outcome of cancelling a party (kill path,
+/// docs/03_KERNEL_OBJECTS.md §6 failure behavior).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelOutcome {
+    /// The thread was not parked here.
+    NotWaiting,
+    /// The parked party was removed; endpoint is Idle again. The
+    /// in-flight message (if any) is dropped undelivered — the
+    /// receiver observes nothing (docs/04, no partial messages).
+    Cancelled,
+}
+
+/// Synchronous rendezvous: send `msg` from `sender` on `ep`.
+///
+/// Deterministic: the outcome is a pure function of the endpoint state
+/// (docs/08_IPC_MODEL.md §4). Capability checks happen at the syscall
+/// layer (Phase 9) before this function is reached.
+pub fn send(ep: &mut Endpoint, sender: ThreadId, msg: Message) -> Result<SendOutcome, IpcError> {
+    match ep.state() {
+        EndpointState::Idle => {
+            ep.put_pending(msg);
+            ep.set_state(EndpointState::SenderWaiting { sender });
+            Ok(SendOutcome::Blocked)
+        }
+        EndpointState::ReceiverWaiting { receiver } => {
+            // Atomic transfer: bounded copy to the receiver, endpoint
+            // returns to Idle, both parties continue.
+            ep.set_state(EndpointState::Idle);
+            Ok(SendOutcome::Delivered { to: receiver, msg })
+        }
+        EndpointState::SenderWaiting { sender: s } => {
+            if s == sender {
+                Err(IpcError::AlreadyWaiting)
+            } else {
+                Err(IpcError::Busy)
+            }
+        }
+    }
+}
+
+/// Synchronous rendezvous: receive on `ep` as `receiver`.
+pub fn recv(ep: &mut Endpoint, receiver: ThreadId) -> Result<RecvOutcome, IpcError> {
+    match ep.state() {
+        EndpointState::Idle => {
+            ep.set_state(EndpointState::ReceiverWaiting { receiver });
+            Ok(RecvOutcome::Blocked)
+        }
+        EndpointState::SenderWaiting { sender } => {
+            let msg = ep.take_pending().expect(
+                "kernel invariant: SenderWaiting implies a pending message",
+            );
+            ep.set_state(EndpointState::Idle);
+            Ok(RecvOutcome::Received { msg, unblock: sender })
+        }
+        EndpointState::ReceiverWaiting { receiver: r } => {
+            if r == receiver {
+                Err(IpcError::AlreadyWaiting)
+            } else {
+                Err(IpcError::Busy)
+            }
+        }
+    }
+}
+
+/// Cancel a parked party (thread killed while blocked). The kernel
+/// unblocks the peer with ERR_PEER_KILLED at the syscall layer.
+pub fn cancel(ep: &mut Endpoint, tid: ThreadId) -> CancelOutcome {
+    match ep.state() {
+        EndpointState::SenderWaiting { sender } if sender == tid => {
+            let _ = ep.take_pending(); // dropped undelivered
+            ep.set_state(EndpointState::Idle);
+            CancelOutcome::Cancelled
+        }
+        EndpointState::ReceiverWaiting { receiver } if receiver == tid => {
+            ep.set_state(EndpointState::Idle);
+            CancelOutcome::Cancelled
+        }
+        _ => CancelOutcome::NotWaiting,
+    }
+}

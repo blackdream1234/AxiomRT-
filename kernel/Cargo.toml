@@ -21,3 +21,7 @@ path = "src/main.rs"
 [[test]]
 name = "scheduler_tests"
 path = "../tests/scheduler_tests.rs"
+
+[[test]]
+name = "ipc_tests"
+path = "../tests/ipc_tests.rs"
