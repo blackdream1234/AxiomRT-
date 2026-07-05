@@ -22,3 +22,6 @@ pub mod thread;
 
 // Fixed-priority scheduler (Phase 6, docs/09_SCHEDULER_MODEL.md).
 pub mod sched;
+
+// Synchronous IPC (Phase 8, docs/08_IPC_MODEL.md).
+pub mod ipc;
