@@ -28,3 +28,6 @@ pub mod ipc;
 
 // Capability-based access control (Phase 9, docs/06_CAPABILITY_MODEL.md).
 pub mod caps;
+
+// Fault events and recovery model (Phase 10, docs/06_FAULT_MODEL.md).
+pub mod fault;

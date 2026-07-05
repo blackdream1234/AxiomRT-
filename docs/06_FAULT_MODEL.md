@@ -168,3 +168,17 @@ Common logging fields for every fault event: `event_id`, `timestamp`,
    are never dropped).
 5. The supervisor's decision is applied through the same capability-checked
    kernel mechanisms as any other operation.
+
+---
+
+## Implementation Notes (kept current per phase)
+
+* **FaultEvent model (Phase 10, AXIOM-FAULT-001):**
+  `kernel/src/fault/event.rs`. The eight fault types and four severity
+  levels are explicit enums; severity is *derived* from the fault type
+  (the reporter can never choose it). The event payload (id, type,
+  thread, pc, detail) is immutable by construction — no setters exist.
+  The lifecycle is the checked forward chain Created → Queued →
+  Delivered → Acknowledged; skips, rewinds, and double-acknowledge are
+  explicit `IllegalEventTransition` errors (unit-tested). No recovery
+  policy is implemented in this task.
