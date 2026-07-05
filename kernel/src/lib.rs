@@ -31,3 +31,6 @@ pub mod caps;
 
 // Fault events and recovery model (Phase 10, docs/06_FAULT_MODEL.md).
 pub mod fault;
+
+// Runtime monitoring events (Phase 11, docs/11_RUNTIME_MONITORING.md).
+pub mod monitor;
