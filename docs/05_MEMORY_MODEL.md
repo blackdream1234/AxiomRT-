@@ -63,6 +63,9 @@ property in section 10.
 ## 5. Page Tables
 
 * Each AddressSpace has one page table tree (Sv39, three levels).
+  Hardware activation of Sv39 is specified in docs/12_MMU_SV39.md
+  (v0.2, Stage 1): from v0.2 the MMU enforces these rules on target for
+  the tested cases, upgrading the isolation claim from model-level.
 * Page tables are kernel memory; user tasks can never read or write them.
 * The page table is a refinement of the AddressSpace model: every hardware
   entry corresponds to exactly one model mapping. Divergence is a kernel
