@@ -27,9 +27,18 @@ docs/01_SCOPE_AND_NON_GOALS.md.
 
 ## 3. Current phase
 
-**v1.0 — Industrial Evaluation Kit** (completion roadmap
-`Full Completion Mode.md` Stages 0–9 done; tags `v0.1-final` …
-`v1.0-industrial-eval`).
+* **Current milestone:** `v1.0-industrial-eval` — Industrial Evaluation
+  Kit (completion roadmap `Full Completion Mode.md` Stages 0–9 done;
+  tags `v0.1-final` … `v1.0-industrial-eval`).
+* **Next milestone:** `v1.0.1-clean` — release hygiene (zero warnings,
+  consistent docs, archived clean verification log).
+* **Next product direction:** real OS completion
+  (`AxiomrtFull Completion Mode.md` — user-facing shell, application
+  loading, filesystem/storage services, host tooling).
+* **Next software phase:** developer tooling (`axiomctl`) + user-facing
+  shell.
+* **Next hardware phase:** real RISC-V board support (requires a
+  physical board with MMU; emulator-only until then).
 
 On QEMU RISC-V 64 the kernel boots through OpenSBI and demonstrates,
 each with an automated test: Sv39/MMU hardware memory isolation,
@@ -101,19 +110,24 @@ docs/07_CODEX_RULES.md.
 
 ```text
 Phase 0:  Kernel Blueprint            (complete — gated)
-Phase 1:  Repository Skeleton         (current)
-Phase 2:  Boot Kernel in QEMU
-Phase 3:  Trap and Exception Layer
-Phase 4:  Memory Isolation
-Phase 5:  Thread Model
-Phase 6:  Scheduler
-Phase 7:  User Mode
-Phase 8:  IPC
-Phase 9:  Capabilities
-Phase 10: Fault Recovery
-Phase 11: Runtime Monitoring
-Phase 12: Formal Proof Starter
-Phase 13: Industrial Evaluation Kit
+Phase 1:  Repository Skeleton         (complete)
+Phase 2:  Boot Kernel in QEMU         (complete)
+Phase 3:  Trap and Exception Layer    (complete)
+Phase 4:  Memory Isolation            (complete — MMU on target, v0.2)
+Phase 5:  Thread Model                (complete)
+Phase 6:  Scheduler                   (complete — preemptive on target, v0.4)
+Phase 7:  User Mode                   (complete)
+Phase 8:  IPC                         (complete — on target, v0.6)
+Phase 9:  Capabilities                (complete — on target, v0.7)
+Phase 10: Fault Recovery              (complete — supervisor chain, v0.8)
+Phase 11: Runtime Monitoring          (complete)
+Phase 12: Formal Proof Starter        (complete — model-level, refinement TODO)
+Phase 13: Industrial Evaluation Kit   (complete — v1.0)
 ```
+
+Next: the real-OS completion phases (developer CLI, structured events,
+Studio dashboard, installer, CI, init/console/shell services,
+application loading, filesystem/storage, drivers, real hardware) are
+defined in `AxiomrtFull Completion Mode.md`.
 
 Documentation index: docs/INDEX.md. Start at docs/00_PROJECT_CHARTER.md.
