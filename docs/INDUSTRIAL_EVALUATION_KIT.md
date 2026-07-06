@@ -1,8 +1,19 @@
 # AxiomRT Safety Core — Industrial Evaluation Kit
 
-Document ID: created by AXIOM-KIT-001 (Phase 13)
+Document ID: created by AXIOM-KIT-001 (Phase 13); expanded to the v1.0
+kit by Full Completion Mode Stage 9.
 Requirement reference: docs/00_PROJECT_CHARTER.md §4, Project
 Description §24–§25.
+
+> **v1.0 note.** This document was written for the v0.1 baseline. The
+> v1.0 kit adds substantial on-target capability: Sv39/MMU isolation,
+> preemptive multi-task scheduling, watchdog, on-target IPC and
+> capability enforcement, the supervisor/logger recovery chain, and the
+> full four-task demo — all QEMU-verified. The authoritative v1.0
+> documents are in `kit/`: LIMITATIONS, ASSUMPTIONS_OF_USE,
+> SAFETY_CONCEPT, SECURITY_CONCEPT, VERIFICATION_REPORT, TEST_REPORT,
+> FINAL_REPORT. Assemble the kit with `./scripts/build_eval_kit.sh`;
+> verify with `./scripts/verify_all.sh`.
 
 ## 1. Product Definition
 

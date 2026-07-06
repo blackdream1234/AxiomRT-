@@ -27,20 +27,26 @@ docs/01_SCOPE_AND_NON_GOALS.md.
 
 ## 3. Current phase
 
-**v0.2 — Sv39/MMU hardware memory isolation** (on the completion
-roadmap, `Full Completion Mode.md`).
+**v1.0 — Industrial Evaluation Kit** (completion roadmap
+`Full Completion Mode.md` Stages 0–9 done; tags `v0.1-final` …
+`v1.0-industrial-eval`).
 
-The kernel boots on QEMU/OpenSBI, activates the Sv39 MMU, and runs a
-user task under its own page table: a user attempt to read kernel
-memory, write an unmapped address, or execute a non-executable page
-takes a hardware page fault that is contained while the kernel
-survives (tests/memory_isolation_qemu_test.sh). Model layers (threads,
-scheduler, IPC, capabilities, fault recovery, monitoring) are
-host-tested; Coq starter models compile with core theorems proven.
-Remaining gaps (multi-task dispatch, timer preemption, watchdog,
-on-target IPC/supervisor): tracked stage by stage in
-`Full Completion Mode.md` §12+. Demo: docs/DEMO_SCENARIO.md; evidence:
-evidence/v0.1, evidence/v0.2.
+On QEMU RISC-V 64 the kernel boots through OpenSBI and demonstrates,
+each with an automated test: Sv39/MMU hardware memory isolation,
+multi-task fixed-priority preemptive scheduling, watchdog containment of
+CPU exhaustion, synchronous copy-based IPC, capability enforcement
+(deny-by-default), a supervisor/logger fault-recovery chain, and the
+full four-task fault-containment demo (a faulty task is contained while
+the critical task keeps running and the kernel stays alive). 9/9 QEMU
+tests, 129 host tests, and 3 Coq model files pass.
+
+Verify everything: `./scripts/verify_all.sh`. Run the flagship demo:
+`cargo build --release --features demo_full && ./scripts/run_qemu.sh`.
+Assemble the kit: `./scripts/build_eval_kit.sh`. Read `kit/LIMITATIONS.md`
+and `kit/ASSUMPTIONS_OF_USE.md` first — this is an emulator-only,
+evaluation-stage kit with no certification claim. Roadmap beyond v1.0
+(real hardware, pilots, certification) needs a physical board and
+external parties and is out of scope for this kit.
 
 ## 4. Target platform
 
