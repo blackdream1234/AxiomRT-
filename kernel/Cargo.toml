@@ -18,6 +18,8 @@ isolation_exec_nonexec = []
 # Two-task cooperative dispatch demo (AXIOM-SCHEDRT, v0.3). Off by
 # default so the default build stays the v0.2 memory-isolation demo.
 demo_multitask = []
+# Timer preemption demo (AXIOM-TIMER, v0.4). Off by default.
+demo_preempt = []
 
 [lib]
 name = "kernel"

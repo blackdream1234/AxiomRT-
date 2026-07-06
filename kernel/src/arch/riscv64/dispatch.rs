@@ -37,10 +37,13 @@ enum RtState {
     Killed,
 }
 
-/// A task control block (AXIOM-SCHEDRT-001).
+/// A task control block (AXIOM-SCHEDRT-001; priority added by
+/// AXIOM-TIMER-007).
 #[derive(Clone, Copy)]
 struct Tcb {
     state: RtState,
+    /// Fixed priority; higher value = more urgent (docs/09 §2).
+    prio: u8,
     /// Physical root of this task's Sv39 address space.
     satp_root: u64,
     /// Saved full register context (AXIOM-SCHEDRT-002).
@@ -50,6 +53,7 @@ struct Tcb {
 
 const EMPTY_TCB: Tcb = Tcb {
     state: RtState::Empty,
+    prio: 0,
     satp_root: 0,
     frame: TrapFrame { regs: [0; 31], sepc: 0, sstatus: 0 },
     name: "",
@@ -90,6 +94,7 @@ fn read_sstatus() -> u64 {
 pub unsafe fn register_task(
     idx: usize,
     name: &'static str,
+    prio: u8,
     root: PhysAddr,
     entry_va: u64,
     sp_va: u64,
@@ -99,7 +104,7 @@ pub unsafe fn register_task(
     let mut frame = TrapFrame::new_user(entry_va, sp_va);
     // Preserve UXL etc. from the live sstatus; SPP=0 (→U), SPIE=1.
     frame.sstatus = (read_sstatus() & !SSTATUS_SPP) | SSTATUS_SPIE;
-    let tcb = Tcb { state: RtState::Ready, satp_root: root.as_u64(), frame, name };
+    let tcb = Tcb { state: RtState::Ready, prio, satp_root: root.as_u64(), frame, name };
     // SAFETY: exclusive boot-time access to a distinct slot.
     unsafe {
         let tasks = &mut *core::ptr::addr_of_mut!(TASKS);
@@ -113,21 +118,26 @@ fn tasks_mut() -> &'static mut [Tcb; MAX_TASKS] {
     unsafe { &mut *core::ptr::addr_of_mut!(TASKS) }
 }
 
-/// Round-robin selection of the next Ready task after `cur`, excluding
-/// Killed/Faulted/Blocked (SCHEDRT-006). Returns None if none is Ready.
-fn select_next(cur: usize) -> Option<usize> {
+/// Select the highest-priority Ready task, scanning in round-robin
+/// order after `cur` so equal priorities tie-break round-robin
+/// (SCHED-P1, docs/09 §4/§2; AXIOM-SCHEDRT-006 + AXIOM-TIMER-007).
+/// Killed/Faulted/Blocked are never Ready, so never selected. Returns
+/// None if no task is Ready.
+fn select_highest(cur: usize) -> Option<usize> {
     let tasks = tasks_mut();
+    let mut best: Option<usize> = None;
     for step in 1..=MAX_TASKS {
         let idx = (cur + step) % MAX_TASKS;
-        if tasks[idx].state == RtState::Ready {
-            return Some(idx);
+        if tasks[idx].state != RtState::Ready {
+            continue;
         }
+        best = match best {
+            None => Some(idx),
+            Some(b) if tasks[idx].prio > tasks[b].prio => Some(idx),
+            other => other,
+        };
     }
-    // Fall back to the current task if it is still Ready (single task).
-    if tasks[cur].state == RtState::Ready {
-        return Some(cur);
-    }
-    None
+    best
 }
 
 fn emit(prefix: &str, name: &str) {
@@ -198,7 +208,7 @@ fn switch(frame: &mut TrapFrame, exiting: bool) {
         tasks[cur].state = RtState::Ready;
     }
 
-    match select_next(cur) {
+    match select_highest(cur) {
         Some(next) => {
             tasks[next].state = RtState::Running;
             CURRENT.store(next, Ordering::SeqCst);
@@ -212,10 +222,45 @@ fn switch(frame: &mut TrapFrame, exiting: bool) {
         }
         None => {
             uart::put_str("SCHED idle=all_tasks_done\n");
+            uart::put_str("KERNEL alive=true\n");
             uart::put_str("phase=multitask-demo-complete\n");
             loop {
                 core::hint::spin_loop();
             }
         }
     }
+}
+
+/// Timer preemption point (AXIOM-TIMER-006/007). Preempts the running
+/// task only if a strictly higher-priority task is Ready; otherwise the
+/// current task continues (the tick is a no-op switch). A lone
+/// low-priority infinite loop therefore keeps running but stays
+/// preemptible — the kernel never freezes (docs/15 §5).
+pub fn preempt(frame: &mut TrapFrame) {
+    if !ACTIVE.load(Ordering::SeqCst) {
+        return;
+    }
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let tasks = tasks_mut();
+    let Some(next) = select_highest(cur) else {
+        return; // no Ready task besides the current one
+    };
+    if next == cur || tasks[next].prio <= tasks[cur].prio {
+        return; // nobody out-ranks the running task
+    }
+    // Preempt: save the running task, switch to the higher one.
+    uart::put_str("SCHED preempt=");
+    uart::put_str(tasks[cur].name);
+    uart::put_str(" selected=");
+    uart::put_str(tasks[next].name);
+    uart::put_str("\n");
+    tasks[cur].frame = *frame;
+    tasks[cur].state = RtState::Ready;
+    tasks[next].state = RtState::Running;
+    CURRENT.store(next, Ordering::SeqCst);
+    let root = PhysAddr::new(tasks[next].satp_root);
+    // SAFETY: next task's address space maps the kernel (U=0); the trap
+    // handler, trap stack, and frame stay valid across the switch.
+    unsafe { paging_hw::switch_to_user_space(root) };
+    *frame = tasks[next].frame;
 }

@@ -110,3 +110,13 @@ appear), both tasks exit, and the demo completes
 (`phase=multitask-demo-complete`). Restores the default build
 afterwards. This is the v0.3 gate evidence that two U-mode tasks run
 and cooperatively switch on target.
+
+## Timer Preemption QEMU Test (AXIOM-TIMER-008, v0.4)
+
+Script: `tests/timer_preemption_qemu_test.sh` — builds with `--features
+demo_preempt`, boots, and asserts a low-priority infinite loop is
+preempted by the timer (`SCHED preempt=low_loop selected=critical_task`)
+in favour of a high-priority task, that the critical task runs and
+exits, and that **no `PANIC` line appears** (the kernel stays alive
+despite the infinite loop). This is the v0.4 gate evidence that the
+scheduler is preemptive and a runaway task cannot freeze the kernel.

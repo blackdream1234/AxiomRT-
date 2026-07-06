@@ -60,8 +60,9 @@ pub fn multitask_demo() -> ! {
         let uas = paging_hw::build_user_address_space(i, code_phys, stack_phys);
         // SAFETY: boot-time, single hart, distinct slot i; the address
         // space maps the kernel (U=0) and the task's code/stack (U=1).
+        // Equal priority (1): cooperative round-robin (docs/13 §5).
         unsafe {
-            dispatch::register_task(i, NAMES[i], uas.root, uas.entry_va, uas.stack_top_va);
+            dispatch::register_task(i, NAMES[i], 1, uas.root, uas.entry_va, uas.stack_top_va);
         }
         uart::put_str("TASK_STARTED task=");
         uart::put_str(NAMES[i]);

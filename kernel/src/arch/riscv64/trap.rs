@@ -69,6 +69,8 @@ const CAUSE_INSTRUCTION_PAGE_FAULT: u64 = 12;
 const CAUSE_LOAD_PAGE_FAULT: u64 = 13;
 const CAUSE_STORE_PAGE_FAULT: u64 = 15;
 const INTERRUPT_BIT: u64 = 1 << 63;
+/// Interrupt cause code 5: supervisor timer interrupt (AXIOM-TIMER-004).
+const CAUSE_SUPERVISOR_TIMER: u64 = 5;
 
 /// Kernel virtual range (identity-mapped), for classifying whether a
 /// user page fault targeted kernel memory vs. an unmapped user address
@@ -184,8 +186,13 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
     let scause = read_scause();
 
     if scause & INTERRUPT_BIT != 0 {
-        // Phase 3: no interrupt sources are enabled; an interrupt here is
-        // outside the specified state space -> controlled panic.
+        // Supervisor timer interrupt (code 5): preemption tick
+        // (AXIOM-TIMER-004, docs/15_TIMER_PREEMPTION.md). Any other
+        // interrupt is outside the enabled set -> controlled panic.
+        if scause & 0xff == CAUSE_SUPERVISOR_TIMER {
+            crate::timer::on_timer_interrupt(frame);
+            return;
+        }
         report("unexpected-interrupt", scause, frame);
         uart::put_str("PANIC kernel=axiomrt reason=unexpected_interrupt phase=trap\n");
         halt();

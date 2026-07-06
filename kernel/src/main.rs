@@ -40,16 +40,28 @@ mod paging_hw;
 
 // On-target cooperative task dispatcher (v0.3, AXIOM-SCHEDRT-001..006).
 // Always compiled on target (the trap layer calls it); inert until
-// tasks are registered by the multitask demo.
+// tasks are registered by a demo.
 #[cfg(target_arch = "riscv64")]
 #[path = "arch/riscv64/dispatch.rs"]
 mod dispatch;
+
+// Supervisor timer and preemption tick (v0.4, AXIOM-TIMER-002..007).
+// Always compiled on target (the trap layer routes timer interrupts
+// here); dormant until enabled by the preemption demo.
+#[cfg(target_arch = "riscv64")]
+#[path = "arch/riscv64/timer.rs"]
+mod timer;
 
 // Two-task cooperative demo (v0.3, feature-gated so the default build
 // keeps the v0.2 memory-isolation demo and its tests).
 #[cfg(all(target_arch = "riscv64", feature = "demo_multitask"))]
 #[path = "arch/riscv64/multitask.rs"]
 mod multitask;
+
+// Timer preemption demo (v0.4, feature-gated).
+#[cfg(all(target_arch = "riscv64", feature = "demo_preempt"))]
+#[path = "arch/riscv64/preempt.rs"]
+mod preempt;
 
 // User task layer (Phase 7). The image model is target-independent and
 // unit-tested on the host. Transitional allowance: the model is
@@ -78,14 +90,18 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     // mappings carry no U bit (docs/12_MMU_SV39.md §4).
     paging_hw::enable_kernel_paging();
 
-    // v0.3 (AXIOM-SCHEDRT): the two-task cooperative dispatch demo, or
-    // the v0.2 single-task memory-isolation demo by default. Neither
-    // returns (docs/13_DISPATCH.md, docs/10_USER_MODE.md).
-    #[cfg(feature = "demo_multitask")]
+    // Select the on-target demo (none returns): timer preemption (v0.4),
+    // two-task cooperative dispatch (v0.3), or the v0.2 single-task
+    // memory-isolation demo by default (docs/15, docs/13, docs/10).
+    #[cfg(feature = "demo_preempt")]
+    {
+        preempt::preempt_demo()
+    }
+    #[cfg(all(feature = "demo_multitask", not(feature = "demo_preempt")))]
     {
         multitask::multitask_demo()
     }
-    #[cfg(not(feature = "demo_multitask"))]
+    #[cfg(not(any(feature = "demo_multitask", feature = "demo_preempt")))]
     {
         user::first_user_task_demo()
     }
