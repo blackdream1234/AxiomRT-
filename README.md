@@ -27,15 +27,20 @@ docs/01_SCOPE_AND_NON_GOALS.md.
 
 ## 3. Current phase
 
-**v0.1 prototype — Phases 0–13 executed** (evaluation kit assembled).
+**v0.2 — Sv39/MMU hardware memory isolation** (on the completion
+roadmap, `Full Completion Mode.md`).
 
-The kernel boots on QEMU/OpenSBI, runs a user task at U privilege,
-answers syscalls through the trap path, denies capability-less IPC, and
-contains user faults while surviving. Model layers (memory, threads,
+The kernel boots on QEMU/OpenSBI, activates the Sv39 MMU, and runs a
+user task under its own page table: a user attempt to read kernel
+memory, write an unmapped address, or execute a non-executable page
+takes a hardware page fault that is contained while the kernel
+survives (tests/memory_isolation_qemu_test.sh). Model layers (threads,
 scheduler, IPC, capabilities, fault recovery, monitoring) are
 host-tested; Coq starter models compile with core theorems proven.
-Known limitations (MMU not yet activated, single task on target):
-docs/INDUSTRIAL_EVALUATION_KIT.md §9. Demo: docs/DEMO_SCENARIO.md.
+Remaining gaps (multi-task dispatch, timer preemption, watchdog,
+on-target IPC/supervisor): tracked stage by stage in
+`Full Completion Mode.md` §12+. Demo: docs/DEMO_SCENARIO.md; evidence:
+evidence/v0.1, evidence/v0.2.
 
 ## 4. Target platform
 

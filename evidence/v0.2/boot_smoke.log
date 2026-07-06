@@ -1,0 +1,5 @@
+    Finished `release` profile [optimized] target(s) in 0.00s
+ok: found "AxiomRT kernel booted"
+ok: found "arch=riscv64"
+ok: found "phase=boot"
+PASS: boot smoke test

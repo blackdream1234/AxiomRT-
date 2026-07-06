@@ -1,0 +1,4 @@
+ok[read-kernel]: page fault contained, reason=user_access_kernel_memory, kernel survived
+ok[write-unmapped]: page fault contained, reason=user_access_unmapped, kernel survived
+ok[exec-nonexec]: page fault contained, reason=user_execute_nonexecutable, kernel survived
+PASS: memory isolation QEMU tests

@@ -3,6 +3,15 @@
 Document ID: AXIOM-DOC-006
 Status: Approved for Phase 0
 
+## Enforcement Status
+
+* v0.1: model-level (typed Rust model + host tests).
+* **v0.2: MMU-enforced on QEMU for the tested cases** — Sv39 is active;
+  a user task that reads kernel memory, writes an unmapped address, or
+  executes a non-executable page takes a hardware page fault that is
+  contained (docs/12_MMU_SV39.md, tests/memory_isolation_qemu_test.sh).
+  Untested access patterns remain a documented gap.
+
 ## Core Rules (Normative)
 
 1. No user task can access kernel memory.
