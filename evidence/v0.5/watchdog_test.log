@@ -1,0 +1,7 @@
+ok: TASK_STARTED task=faulty_task
+ok: TASK_STARTED task=critical_task
+ok: FAULT type=WatchdogTimeout task=faulty_task
+ok: CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive
+ok: SCHED selected=critical_task
+ok: no PANIC (kernel stayed alive; CPU exhaustion contained)
+PASS: watchdog test

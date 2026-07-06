@@ -1,0 +1,9 @@
+MMU status=enabled mode=sv39 scope=kernel
+TASK_STARTED task=faulty_task
+TASK_STARTED task=critical_task
+TIMER tick=1
+TIMER tick=2
+TIMER tick=3
+FAULT type=WatchdogTimeout task=faulty_task
+CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive
+SCHED selected=critical_task
