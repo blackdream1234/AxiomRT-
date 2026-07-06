@@ -1,0 +1,18 @@
+MMU status=enabled mode=sv39 scope=kernel
+TASK_STARTED task=task_a
+TASK_STARTED task=task_b
+SYSCALL name=sys_yield task=task_a
+SCHED selected=task_b
+SYSCALL name=sys_yield task=task_b
+SCHED selected=task_a
+SYSCALL name=sys_yield task=task_a
+SCHED selected=task_b
+SYSCALL name=sys_yield task=task_b
+SCHED selected=task_a
+SYSCALL name=sys_exit task=task_a
+TASK_EXITED task=task_a
+SCHED selected=task_b
+SYSCALL name=sys_exit task=task_b
+TASK_EXITED task=task_b
+SCHED idle=all_tasks_done
+phase=multitask-demo-complete

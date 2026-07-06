@@ -1,0 +1,8 @@
+ok: TASK_STARTED task=task_a
+ok: TASK_STARTED task=task_b
+ok: SCHED selected=task_b
+ok: SCHED selected=task_a
+ok: TASK_EXITED task=task_a
+ok: TASK_EXITED task=task_b
+ok: phase=multitask-demo-complete
+PASS: two-task dispatch test
