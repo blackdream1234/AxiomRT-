@@ -33,6 +33,11 @@ core::arch::global_asm!(include_str!("arch/riscv64/trap.S"));
 #[path = "arch/riscv64/trap.rs"]
 mod trap;
 
+// Sv39 kernel paging activation (v0.2, AXIOM-MEMHW-004).
+#[cfg(target_arch = "riscv64")]
+#[path = "arch/riscv64/paging_hw.rs"]
+mod paging_hw;
+
 // User task layer (Phase 7). The image model is target-independent and
 // unit-tested on the host. Transitional allowance: the model is
 // consumed on target by the user-mode transition (AXIOM-USER-002).
@@ -54,6 +59,11 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     uart::put_str("AxiomRT kernel booted\n");
     uart::put_str("arch=riscv64\n");
     uart::put_str("phase=boot\n");
+
+    // v0.2 (AXIOM-MEMHW-004): enable Sv39 with the kernel identity map.
+    // After this the MMU translates every kernel access; kernel
+    // mappings carry no U bit (docs/12_MMU_SV39.md §4).
+    paging_hw::enable_kernel_paging();
 
     // Phase 7 (AXIOM-USER-002): run the first user task outside kernel
     // privilege. Never returns: the user session ends in the registered

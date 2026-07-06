@@ -1,9 +1,15 @@
-/* AxiomRT kernel linker script (AXIOM-BOOT-002).
- * Requirement reference: docs/09_BUILD_AND_BOOT.md.
+/* AxiomRT kernel linker script (AXIOM-BOOT-002; section symbols added by
+ * AXIOM-MEMHW-004 for Sv39 per-region permissions).
+ * Requirement reference: docs/09_BUILD_AND_BOOT.md, docs/12_MMU_SV39.md.
  *
  * QEMU virt machine + OpenSBI: firmware occupies RAM from 0x80000000;
  * the supervisor-mode payload is entered at 0x80200000.
  * Layout is static; there is no heap (docs/05_MEMORY_MODEL.md §2).
+ *
+ * Section boundary symbols (__text_start, __text_end, ...) are exported
+ * so the kernel can build an Sv39 identity map with correct per-region
+ * permissions (text R+X, rodata R, data/bss/stack R+W). Each region is
+ * 4 KiB aligned so page ranges are exact.
  */
 
 OUTPUT_ARCH(riscv)
@@ -17,17 +23,25 @@ SECTIONS
     . = KERNEL_BASE;
 
     .text : ALIGN(4K) {
+        __text_start = .;
         /* Boot entry must be first: OpenSBI jumps to KERNEL_BASE. */
         KEEP(*(.text.boot))
         *(.text .text.*)
+        . = ALIGN(4K);
+        __text_end = .;
     }
 
     .rodata : ALIGN(4K) {
+        __rodata_start = .;
         *(.rodata .rodata.*)
         *(.srodata .srodata.*)
+        . = ALIGN(4K);
+        __rodata_end = .;
     }
 
+    /* Writable region: data, bss, and boot stack are one R+W span. */
     .data : ALIGN(4K) {
+        __data_start = .;
         *(.data .data.*)
         *(.sdata .sdata.*)
     }
@@ -44,8 +58,10 @@ SECTIONS
     .stack (NOLOAD) : ALIGN(16) {
         __stack_bottom = .;
         . += BOOT_STACK_SIZE;
+        . = ALIGN(4K);
         __stack_top = .;
     }
+    __data_end = .;
 
     /DISCARD/ : {
         *(.eh_frame .eh_frame_hdr)
