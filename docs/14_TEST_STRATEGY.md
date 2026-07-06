@@ -131,3 +131,13 @@ checks in is detected as a watchdog timeout
 critical task then runs (`SCHED selected=critical_task`), and that no
 `PANIC` appears. This is the v0.5 gate evidence that CPU exhaustion is
 detected and contained while a critical task continues.
+
+## On-Target IPC QEMU Test (AXIOM-IPCRT-010, v0.6)
+
+Script: `tests/ipc_rendezvous_qemu_test.sh` — builds with `--features
+demo_ipc`, boots, and asserts a synchronous message exchange between two
+U-mode tasks in separate address spaces: the receiver blocks
+(`state=blocked`), the sender sends, the message is delivered across the
+address spaces (`IPC delivered bytes=4`), both tasks exit, and no
+`PANIC` appears. This is the v0.6 gate evidence that bounded,
+copy-based, blocking IPC works on target with no shared memory.

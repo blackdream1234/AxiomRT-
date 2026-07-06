@@ -22,6 +22,8 @@ demo_multitask = []
 demo_preempt = []
 # Watchdog / CPU-exhaustion demo (AXIOM-WDOG, v0.5). Off by default.
 demo_watchdog = []
+# On-target IPC rendezvous demo (AXIOM-IPCRT, v0.6). Off by default.
+demo_ipc = []
 
 [lib]
 name = "kernel"

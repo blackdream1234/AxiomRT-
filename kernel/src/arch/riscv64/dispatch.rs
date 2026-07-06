@@ -1,16 +1,19 @@
-//! On-target task dispatcher (AXIOM-SCHEDRT-001/002/003/005/006).
+//! On-target task dispatcher and synchronous IPC
+//! (AXIOM-SCHEDRT, AXIOM-TIMER, AXIOM-WDOG, AXIOM-IPCRT).
 //!
-//! Requirement reference: docs/13_DISPATCH.md, docs/09_SCHEDULER_MODEL.md.
+//! Requirement reference: docs/13_DISPATCH.md, docs/15_TIMER_PREEMPTION.md,
+//! docs/16_WATCHDOG.md, docs/17_IPC_ONTARGET.md, docs/09_SCHEDULER_MODEL.md.
 //!
-//! A minimal cooperative dispatcher for U-mode tasks. Each task has a
-//! control block holding its address space root and a saved trap frame
-//! (its full register context). On `sys_yield`/`sys_exit` the live trap
-//! frame is snapshotted into the current task, the next Ready task is
-//! selected (round-robin, excluding Killed/Faulted/Blocked — the state
-//! machine is the authority, docs/09 §4), its address space is
-//! activated, and its saved frame is loaded so the trap return resumes
-//! it. riscv64-only.
+//! A minimal dispatcher for U-mode tasks. Each task has a control block
+//! holding its address space root, saved trap frame, priority, and any
+//! pending IPC delivery. Scheduling selects the highest-priority Ready
+//! task (priority with round-robin tie-break); the timer preempts and
+//! runs the watchdog; `sys_send`/`sys_recv` implement synchronous,
+//! bounded, copy-based IPC between address spaces. All resume paths go
+//! through `resume_task`, which also completes any deferred IPC delivery
+//! now that the target address space is active. riscv64-only.
 
+use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use kernel::memory::PhysAddr;
@@ -19,13 +22,18 @@ use crate::paging_hw;
 use crate::trap::TrapFrame;
 use crate::uart;
 
-// Syscall numbers handled by the dispatcher (docs/04_SYSCALL_MODEL.md).
+// Syscall numbers (docs/04_SYSCALL_MODEL.md).
 const SYS_YIELD: u64 = 1;
 const SYS_EXIT: u64 = 2;
+const SYS_SEND: u64 = 3;
+const SYS_RECV: u64 = 4;
 
-/// On-target run state of a task control block. Blocked and Faulted are
-/// reserved for the IPC (v0.6) and fault (v0.5) stages; the exclusion
-/// logic already refuses to select them.
+// Result codes returned in a0 (docs/04_SYSCALL_MODEL.md).
+const ERR_INVALID_ARG: i64 = -5;
+const ERR_MSG_TOO_LARGE: i64 = -6;
+
+/// On-target run state of a task control block. The scheduler never
+/// selects Killed/Faulted/Blocked (docs/09 §4).
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 enum RtState {
@@ -37,8 +45,7 @@ enum RtState {
     Killed,
 }
 
-/// A task control block (AXIOM-SCHEDRT-001; priority added by
-/// AXIOM-TIMER-007).
+/// A task control block.
 #[derive(Clone, Copy)]
 struct Tcb {
     state: RtState,
@@ -48,6 +55,10 @@ struct Tcb {
     satp_root: u64,
     /// Saved full register context (AXIOM-SCHEDRT-002).
     frame: TrapFrame,
+    /// Deferred IPC delivery to complete when this task next runs:
+    /// (user destination VA, byte length). Applied by `resume_task`
+    /// once this task's address space is active (AXIOM-IPCRT-006).
+    pending_ipc: Option<(u64, usize)>,
     name: &'static str,
 }
 
@@ -56,6 +67,7 @@ const EMPTY_TCB: Tcb = Tcb {
     prio: 0,
     satp_root: 0,
     frame: TrapFrame { regs: [0; 31], sepc: 0, sstatus: 0 },
+    pending_ipc: None,
     name: "",
 };
 
@@ -66,23 +78,37 @@ static mut TASKS: [Tcb; MAX_TASKS] = [EMPTY_TCB; MAX_TASKS];
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Watchdog miss counter for the running task (AXIOM-WDOG-003): ticks
-/// since its last check-in. Reset on any syscall and on every switch.
+/// Watchdog miss counter for the running task (AXIOM-WDOG-003).
 static WATCHDOG_MISS: AtomicU64 = AtomicU64::new(0);
-/// Ticks a task may run without checking in before it is judged stuck
-/// (docs/16 §3). Small for a prompt demo.
 const WATCHDOG_WINDOW: u64 = 4;
 
+// ---- On-target IPC state (AXIOM-IPCRT) ----------------------------------
+
+/// Bounded message size (docs/17 §2; matches the host IPC model).
+const IPC_MSG_MAX: usize = 64;
+/// User data window the demo message buffers live in (the user stack
+/// page mapped by paging_hw at USER_STACK_VA). A user IPC buffer must
+/// lie fully inside it (AXIOM-IPCRT-002/003).
+const USER_DATA_VA: u64 = 0x20_0000;
+const USER_DATA_END: u64 = USER_DATA_VA + 0x1000;
+
+/// Single demo endpoint state (docs/17 §3).
+#[derive(Clone, Copy)]
+enum Ep {
+    Idle,
+    SenderWaiting { tid: usize, len: usize },
+    ReceiverWaiting { tid: usize, dst: u64, cap: usize },
+}
+
+static mut ENDPOINT: Ep = Ep::Idle;
+/// Kernel staging buffer: one bounded in-flight message, no shared
+/// memory (docs/17 §2).
+static mut KMSG: [u8; IPC_MSG_MAX] = [0; IPC_MSG_MAX];
+
 extern "C" {
-    /// S→U transition (arch/riscv64/user_entry.S), used for the very
-    /// first task entry.
     fn __enter_user(entry: u64, user_sp: u64, trap_stack_top: u64) -> !;
 }
 
-// register_task / start / read_sstatus are the demo entry API, exercised
-// only by the multitask demo (feature demo_multitask); on_syscall is the
-// always-compiled hook the trap layer calls. allow(dead_code) keeps the
-// default build (no feature) warning-clean.
 #[allow(dead_code)]
 fn read_sstatus() -> u64 {
     let v: u64;
@@ -91,9 +117,7 @@ fn read_sstatus() -> u64 {
     v
 }
 
-/// Register a task in slot `idx` (AXIOM-SCHEDRT-001). The initial saved
-/// frame is synthesized to enter U-mode at `entry_va` on `sp_va`,
-/// preserving the live sstatus UXL field.
+/// Register a task in slot `idx` (AXIOM-SCHEDRT-001).
 ///
 /// # Safety
 /// Called at boot before dispatching, single hart, distinct `idx`.
@@ -109,27 +133,39 @@ pub unsafe fn register_task(
     const SSTATUS_SPP: u64 = 1 << 8;
     const SSTATUS_SPIE: u64 = 1 << 5;
     let mut frame = TrapFrame::new_user(entry_va, sp_va);
-    // Preserve UXL etc. from the live sstatus; SPP=0 (→U), SPIE=1.
     frame.sstatus = (read_sstatus() & !SSTATUS_SPP) | SSTATUS_SPIE;
-    let tcb = Tcb { state: RtState::Ready, prio, satp_root: root.as_u64(), frame, name };
+    let tcb = Tcb {
+        state: RtState::Ready,
+        prio,
+        satp_root: root.as_u64(),
+        frame,
+        pending_ipc: None,
+        name,
+    };
     // SAFETY: exclusive boot-time access to a distinct slot.
     unsafe {
-        let tasks = &mut *core::ptr::addr_of_mut!(TASKS);
+        let tasks = &mut *addr_of_mut!(TASKS);
         tasks[idx] = tcb;
     }
 }
 
 fn tasks_mut() -> &'static mut [Tcb; MAX_TASKS] {
     // SAFETY: single hart; the dispatcher is the only accessor and runs
-    // in trap/boot context, never re-entrantly (cooperative).
-    unsafe { &mut *core::ptr::addr_of_mut!(TASKS) }
+    // in trap/boot context, never re-entrantly.
+    unsafe { &mut *addr_of_mut!(TASKS) }
 }
 
-/// Select the highest-priority Ready task, scanning in round-robin
-/// order after `cur` so equal priorities tie-break round-robin
-/// (SCHED-P1, docs/09 §4/§2; AXIOM-SCHEDRT-006 + AXIOM-TIMER-007).
-/// Killed/Faulted/Blocked are never Ready, so never selected. Returns
-/// None if no task is Ready.
+fn ep_get() -> Ep {
+    // SAFETY: single-hart, non-reentrant dispatcher state.
+    unsafe { *addr_of!(ENDPOINT) }
+}
+fn ep_set(e: Ep) {
+    // SAFETY: single-hart, non-reentrant dispatcher state.
+    unsafe { *addr_of_mut!(ENDPOINT) = e };
+}
+
+/// Select the highest-priority Ready task, round-robin among equals
+/// (SCHED-P1). Killed/Faulted/Blocked are never Ready (docs/09 §4).
 fn select_highest(cur: usize) -> Option<usize> {
     let tasks = tasks_mut();
     let mut best: Option<usize> = None;
@@ -153,12 +189,96 @@ fn emit(prefix: &str, name: &str) {
     uart::put_str("\n");
 }
 
+fn put_dec(mut v: u64) {
+    if v == 0 {
+        uart::put_byte(b'0');
+        return;
+    }
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while v > 0 {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    for &b in &buf[i..] {
+        uart::put_byte(b);
+    }
+}
+
+// ---- User-memory copy (SUM-gated) ---------------------------------------
+
+fn set_sum() {
+    // SAFETY: setting sstatus.SUM permits S-mode to access U pages for
+    // the duration of a controlled copy (docs/17 §4). Cleared right after.
+    unsafe { core::arch::asm!("csrs sstatus, {b}", b = in(reg) (1u64 << 18)) };
+}
+fn clear_sum() {
+    // SAFETY: clears sstatus.SUM, restoring the default no-U-access rule.
+    unsafe { core::arch::asm!("csrc sstatus, {b}", b = in(reg) (1u64 << 18)) };
+}
+
+/// True if `[va, va+len)` is a valid user IPC buffer in the active
+/// address space's data window (AXIOM-IPCRT-002/003).
+fn valid_user_buf(va: u64, len: usize) -> bool {
+    len <= IPC_MSG_MAX
+        && va >= USER_DATA_VA
+        && va.checked_add(len as u64).is_some_and(|end| end <= USER_DATA_END)
+}
+
+/// Copy `len` bytes from the running task's user buffer into KMSG. The
+/// caller must have validated the range and the sender's satp is active.
+fn copy_from_user(va: u64, len: usize) {
+    set_sum();
+    let kmsg = unsafe { &mut *addr_of_mut!(KMSG) };
+    for i in 0..len {
+        // SAFETY: validated user range, SUM set, byte-wise volatile read.
+        kmsg[i] = unsafe { read_volatile((va + i as u64) as *const u8) };
+    }
+    clear_sum();
+}
+
+/// Copy `len` bytes from KMSG into the running task's user buffer. The
+/// caller must have validated the range and the receiver's satp is active.
+fn copy_to_user(va: u64, len: usize) {
+    set_sum();
+    let kmsg = unsafe { &*addr_of!(KMSG) };
+    for i in 0..len {
+        // SAFETY: validated user range, SUM set, byte-wise volatile write.
+        unsafe { write_volatile((va + i as u64) as *mut u8, kmsg[i]) };
+    }
+    clear_sum();
+}
+
+// ---- Scheduling core ----------------------------------------------------
+
+/// Resume `next`: mark Running, activate its address space, load its
+/// saved frame, and complete any deferred IPC delivery (now that its
+/// satp is active). Central resume path for every scheduling decision.
+fn resume_task(next: usize, frame: &mut TrapFrame) {
+    let tasks = tasks_mut();
+    tasks[next].state = RtState::Running;
+    CURRENT.store(next, Ordering::SeqCst);
+    WATCHDOG_MISS.store(0, Ordering::SeqCst);
+    let root = PhysAddr::new(tasks[next].satp_root);
+    // SAFETY: next's address space maps the kernel (U=0), so the trap
+    // handler, trap stack, and this frame stay valid across the switch.
+    unsafe { paging_hw::switch_to_user_space(root) };
+    *frame = tasks[next].frame;
+    if let Some((dst, len)) = tasks[next].pending_ipc.take() {
+        copy_to_user(dst, len);
+        frame.set_a0(len as i64);
+        uart::put_str("IPC delivered bytes=");
+        put_dec(len as u64);
+        uart::put_str("\n");
+    }
+}
+
 /// Start dispatching from task 0 (AXIOM-SCHEDRT-003 entry).
 ///
 /// # Safety
-/// All registered tasks must have valid address spaces that map the
-/// kernel (U=0) and their own code/stack (U=1); `trap_stack_top` must
-/// be a valid kernel trap stack.
+/// All registered tasks must have valid address spaces mapping the
+/// kernel (U=0) and their own code/stack (U=1); `trap_stack_top` valid.
 #[allow(dead_code)]
 pub unsafe fn start(trap_stack_top: u64) -> ! {
     ACTIVE.store(true, Ordering::SeqCst);
@@ -176,16 +296,13 @@ pub unsafe fn start(trap_stack_top: u64) -> ! {
     }
 }
 
-/// Handle a syscall from the dispatcher's perspective. Returns true if
-/// the dispatcher consumed it (yield/exit); false to let the normal
-/// syscall path run. The trap layer has already advanced `frame.sepc`
-/// past the ecall.
+/// Handle a syscall. Returns true if the dispatcher consumed it. The
+/// trap layer has already advanced `frame.sepc` past the ecall.
 pub fn on_syscall(num: u64, frame: &mut TrapFrame) -> bool {
     if !ACTIVE.load(Ordering::SeqCst) {
         return false;
     }
-    // Any syscall is a watchdog check-in (AXIOM-WDOG-002): the running
-    // task is making progress, so reset its miss counter.
+    // Any syscall is a watchdog check-in (AXIOM-WDOG-002).
     WATCHDOG_MISS.store(0, Ordering::SeqCst);
     match num {
         SYS_YIELD => {
@@ -196,13 +313,19 @@ pub fn on_syscall(num: u64, frame: &mut TrapFrame) -> bool {
             switch(frame, true);
             true
         }
+        SYS_SEND => {
+            ipc_send(frame);
+            true
+        }
+        SYS_RECV => {
+            ipc_recv(frame);
+            true
+        }
         _ => false,
     }
 }
 
-/// Core context switch (AXIOM-SCHEDRT-003/005). Saves or retires the
-/// current task, selects the next Ready task, activates its address
-/// space, and loads its saved frame into the live trap frame.
+/// Cooperative yield/exit switch (AXIOM-SCHEDRT-003/005).
 fn switch(frame: &mut TrapFrame, exiting: bool) {
     let cur = CURRENT.load(Ordering::SeqCst);
     let tasks = tasks_mut();
@@ -213,28 +336,42 @@ fn switch(frame: &mut TrapFrame, exiting: bool) {
         emit("TASK_EXITED task=", tasks[cur].name);
     } else {
         emit("SYSCALL name=sys_yield task=", tasks[cur].name);
-        // Snapshot the live context into the current task.
         tasks[cur].frame = *frame;
         tasks[cur].state = RtState::Ready;
     }
 
     match select_highest(cur) {
         Some(next) => {
-            tasks[next].state = RtState::Running;
-            CURRENT.store(next, Ordering::SeqCst);
-            WATCHDOG_MISS.store(0, Ordering::SeqCst); // fresh window
             emit("SCHED selected=", tasks[next].name);
-            let root = PhysAddr::new(tasks[next].satp_root);
-            // SAFETY: next task's address space maps the kernel (U=0),
-            // so the trap handler, trap stack, and this frame remain
-            // valid after the switch (docs/12_MMU_SV39.md §5).
-            unsafe { paging_hw::switch_to_user_space(root) };
-            *frame = tasks[next].frame;
+            resume_task(next, frame);
+        }
+        None => idle_halt(),
+    }
+}
+
+fn idle_halt() -> ! {
+    uart::put_str("SCHED idle=all_tasks_done\n");
+    uart::put_str("KERNEL alive=true\n");
+    uart::put_str("phase=multitask-demo-complete\n");
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+/// Block the running task and switch away (IPC send/recv with no peer).
+fn block_and_switch(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let tasks = tasks_mut();
+    tasks[cur].frame = *frame;
+    tasks[cur].state = RtState::Blocked;
+    match select_highest(cur) {
+        Some(next) => {
+            emit("SCHED selected=", tasks[next].name);
+            resume_task(next, frame);
         }
         None => {
-            uart::put_str("SCHED idle=all_tasks_done\n");
+            uart::put_str("SCHED idle=all_blocked\n");
             uart::put_str("KERNEL alive=true\n");
-            uart::put_str("phase=multitask-demo-complete\n");
             loop {
                 core::hint::spin_loop();
             }
@@ -242,24 +379,19 @@ fn switch(frame: &mut TrapFrame, exiting: bool) {
     }
 }
 
-/// Timer preemption point (AXIOM-TIMER-006/007). Preempts the running
-/// task only if a strictly higher-priority task is Ready; otherwise the
-/// current task continues (the tick is a no-op switch). A lone
-/// low-priority infinite loop therefore keeps running but stays
-/// preemptible — the kernel never freezes (docs/15 §5).
+/// Timer preemption (AXIOM-TIMER-006/007): preempt only if out-ranked.
 pub fn preempt(frame: &mut TrapFrame) {
     if !ACTIVE.load(Ordering::SeqCst) {
         return;
     }
     let cur = CURRENT.load(Ordering::SeqCst);
-    let tasks = tasks_mut();
     let Some(next) = select_highest(cur) else {
-        return; // no Ready task besides the current one
+        return;
     };
+    let tasks = tasks_mut();
     if next == cur || tasks[next].prio <= tasks[cur].prio {
-        return; // nobody out-ranks the running task
+        return;
     }
-    // Preempt: save the running task, switch to the higher one.
     uart::put_str("SCHED preempt=");
     uart::put_str(tasks[cur].name);
     uart::put_str(" selected=");
@@ -267,23 +399,10 @@ pub fn preempt(frame: &mut TrapFrame) {
     uart::put_str("\n");
     tasks[cur].frame = *frame;
     tasks[cur].state = RtState::Ready;
-    tasks[next].state = RtState::Running;
-    CURRENT.store(next, Ordering::SeqCst);
-    WATCHDOG_MISS.store(0, Ordering::SeqCst); // fresh window
-    let root = PhysAddr::new(tasks[next].satp_root);
-    // SAFETY: next task's address space maps the kernel (U=0); the trap
-    // handler, trap stack, and frame stay valid across the switch.
-    unsafe { paging_hw::switch_to_user_space(root) };
-    *frame = tasks[next].frame;
+    resume_task(next, frame);
 }
 
-/// Watchdog tick (AXIOM-WDOG-004/005/006). Increments the running
-/// task's miss counter; if it exceeds the window, the task is judged
-/// stuck (CPU exhaustion): emit the WatchdogTimeout fault event,
-/// contain it (→ Faulted, never rescheduled), and switch to the
-/// highest-priority Ready task. Returns true if it faulted/switched
-/// (the caller then skips ordinary preemption). Runs before preemption
-/// on each tick so an equal-or-higher-priority hog is still contained.
+/// Watchdog tick (AXIOM-WDOG-004/005/006).
 pub fn watchdog_tick(frame: &mut TrapFrame) -> bool {
     if !ACTIVE.load(Ordering::SeqCst) {
         return false;
@@ -294,22 +413,13 @@ pub fn watchdog_tick(frame: &mut TrapFrame) -> bool {
     }
     let cur = CURRENT.load(Ordering::SeqCst);
     let tasks = tasks_mut();
-    // Emit the fault-model event and contain the task (docs/06, docs/16).
     emit("FAULT type=WatchdogTimeout task=", tasks[cur].name);
     uart::put_str("CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive\n");
     tasks[cur].state = RtState::Faulted;
-
     match select_highest(cur) {
         Some(next) => {
-            tasks[next].state = RtState::Running;
-            CURRENT.store(next, Ordering::SeqCst);
-            WATCHDOG_MISS.store(0, Ordering::SeqCst);
             emit("SCHED selected=", tasks[next].name);
-            let root = PhysAddr::new(tasks[next].satp_root);
-            // SAFETY: next task's address space maps the kernel (U=0);
-            // handler, trap stack, and frame stay valid across the switch.
-            unsafe { paging_hw::switch_to_user_space(root) };
-            *frame = tasks[next].frame;
+            resume_task(next, frame);
         }
         None => {
             uart::put_str("SCHED idle=no_ready_task\n");
@@ -320,4 +430,102 @@ pub fn watchdog_tick(frame: &mut TrapFrame) -> bool {
         }
     }
     true
+}
+
+// ---- IPC syscalls (AXIOM-IPCRT-004..009) --------------------------------
+
+/// sys_send: a1 = user buffer VA, a2 = length. Synchronous, bounded,
+/// copy-based. Blocks if no receiver is waiting (docs/17 §5).
+fn ipc_send(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let buf = frame.regs[10]; // a1
+    let len = frame.regs[11] as usize; // a2
+    let cur_name = tasks_mut()[cur].name;
+
+    if len > IPC_MSG_MAX {
+        frame.set_a0(ERR_MSG_TOO_LARGE);
+        emit("IPC_DENIED op=send reason=msg_too_large task=", cur_name);
+        return;
+    }
+    if !valid_user_buf(buf, len) {
+        frame.set_a0(ERR_INVALID_ARG);
+        emit("IPC_DENIED op=send reason=bad_buffer task=", cur_name);
+        return;
+    }
+    // Copy the sender's buffer into the kernel now (sender satp active).
+    copy_from_user(buf, len);
+
+    match ep_get() {
+        Ep::ReceiverWaiting { tid, dst, cap } => {
+            emit("IPC send task=", cur_name);
+            uart::put_str("IPC endpoint=log op=send\n");
+            let tasks = tasks_mut();
+            if len <= cap && valid_user_buf(dst, len) {
+                // Stage delivery; the receiver completes the copy when
+                // it next runs (its satp) — AXIOM-IPCRT-006.
+                tasks[tid].pending_ipc = Some((dst, len));
+            } else {
+                tasks[tid].frame.set_a0(ERR_MSG_TOO_LARGE);
+            }
+            tasks[tid].state = RtState::Ready;
+            ep_set(Ep::Idle);
+            frame.set_a0(len as i64); // send completes
+            // sender continues running.
+        }
+        Ep::Idle => {
+            ep_set(Ep::SenderWaiting { tid: cur, len });
+            emit("IPC send task=", cur_name);
+            uart::put_str("IPC endpoint=log op=send state=blocked\n");
+            block_and_switch(frame); // send blocks until a receiver
+        }
+        Ep::SenderWaiting { .. } => {
+            frame.set_a0(ERR_INVALID_ARG); // one sender only (bounded)
+            emit("IPC_DENIED op=send reason=busy task=", cur_name);
+        }
+    }
+}
+
+/// sys_recv: a1 = user buffer VA, a2 = capacity. Blocks if no sender is
+/// waiting (docs/17 §5).
+fn ipc_recv(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let dst = frame.regs[10]; // a1
+    let cap = frame.regs[11] as usize; // a2
+    let cur_name = tasks_mut()[cur].name;
+
+    match ep_get() {
+        Ep::SenderWaiting { tid, len } => {
+            if len > cap || !valid_user_buf(dst, len) {
+                frame.set_a0(ERR_INVALID_ARG);
+                emit("IPC_DENIED op=recv reason=bad_buffer task=", cur_name);
+                return;
+            }
+            // Complete the copy into the receiver's buffer (recv satp).
+            copy_to_user(dst, len);
+            frame.set_a0(len as i64);
+            let tasks = tasks_mut();
+            tasks[tid].state = RtState::Ready; // sender's send completes
+            tasks[tid].frame.set_a0(len as i64);
+            ep_set(Ep::Idle);
+            emit("IPC recv task=", cur_name);
+            uart::put_str("IPC delivered bytes=");
+            put_dec(len as u64);
+            uart::put_str("\n");
+        }
+        Ep::Idle => {
+            if cap > IPC_MSG_MAX || !valid_user_buf(dst, cap.min(IPC_MSG_MAX)) {
+                frame.set_a0(ERR_INVALID_ARG);
+                emit("IPC_DENIED op=recv reason=bad_buffer task=", cur_name);
+                return;
+            }
+            ep_set(Ep::ReceiverWaiting { tid: cur, dst, cap });
+            emit("IPC recv task=", cur_name);
+            uart::put_str("IPC endpoint=log op=recv state=blocked\n");
+            block_and_switch(frame); // recv blocks until a sender
+        }
+        Ep::ReceiverWaiting { .. } => {
+            frame.set_a0(ERR_INVALID_ARG); // one receiver only (bounded)
+            emit("IPC_DENIED op=recv reason=busy task=", cur_name);
+        }
+    }
 }

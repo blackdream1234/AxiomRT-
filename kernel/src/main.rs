@@ -68,6 +68,11 @@ mod preempt;
 #[path = "arch/riscv64/watchdog_demo.rs"]
 mod watchdog_demo;
 
+// On-target IPC rendezvous demo (v0.6, feature-gated).
+#[cfg(all(target_arch = "riscv64", feature = "demo_ipc"))]
+#[path = "arch/riscv64/ipc_demo.rs"]
+mod ipc_demo;
+
 // User task layer (Phase 7). The image model is target-independent and
 // unit-tested on the host. Transitional allowance: the model is
 // consumed on target by the user-mode transition (AXIOM-USER-002).
@@ -95,21 +100,31 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     // mappings carry no U bit (docs/12_MMU_SV39.md §4).
     paging_hw::enable_kernel_paging();
 
-    // Select the on-target demo (none returns): watchdog (v0.5), timer
-    // preemption (v0.4), two-task cooperative dispatch (v0.3), or the
-    // v0.2 single-task memory-isolation demo by default.
-    #[cfg(feature = "demo_watchdog")]
+    // Select the on-target demo (none returns): IPC (v0.6), watchdog
+    // (v0.5), timer preemption (v0.4), two-task cooperative dispatch
+    // (v0.3), or the v0.2 single-task memory-isolation demo by default.
+    // At most one demo_* feature is expected to be set at a time.
+    #[cfg(feature = "demo_ipc")]
+    {
+        ipc_demo::ipc_demo()
+    }
+    #[cfg(all(feature = "demo_watchdog", not(feature = "demo_ipc")))]
     {
         watchdog_demo::watchdog_demo()
     }
-    #[cfg(all(feature = "demo_preempt", not(feature = "demo_watchdog")))]
+    #[cfg(all(
+        feature = "demo_preempt",
+        not(feature = "demo_watchdog"),
+        not(feature = "demo_ipc")
+    ))]
     {
         preempt::preempt_demo()
     }
     #[cfg(all(
         feature = "demo_multitask",
         not(feature = "demo_preempt"),
-        not(feature = "demo_watchdog")
+        not(feature = "demo_watchdog"),
+        not(feature = "demo_ipc")
     ))]
     {
         multitask::multitask_demo()
@@ -117,7 +132,8 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     #[cfg(not(any(
         feature = "demo_multitask",
         feature = "demo_preempt",
-        feature = "demo_watchdog"
+        feature = "demo_watchdog",
+        feature = "demo_ipc"
     )))]
     {
         user::first_user_task_demo()
