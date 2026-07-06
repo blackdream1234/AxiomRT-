@@ -11,6 +11,11 @@ pub mod address;
 pub mod frame;
 pub mod pagetable;
 
+// Sv39 hardware page table entry encoding (v0.2, AXIOM-MEMHW-002).
+// Pure data; realizes the permission rules of pagetable.rs on hardware.
+#[path = "../arch/riscv64/sv39.rs"]
+pub mod sv39;
+
 pub use address::{PhysAddr, VirtAddr, PAGE_SIZE};
 
 /// Identifier of an AddressSpace (docs/03_KERNEL_OBJECTS.md §3).
