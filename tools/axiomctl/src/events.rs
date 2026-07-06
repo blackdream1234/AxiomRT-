@@ -173,8 +173,9 @@ pub fn parse_log(text: &str) -> ParsedLog {
 }
 
 /// JSON string escaping per RFC 8259 (quotes, backslashes, control
-/// characters). Everything else passes through as UTF-8.
-fn json_escape(s: &str) -> String {
+/// characters). Everything else passes through as UTF-8. Public so
+/// Studio builds its API responses with the same escaping.
+pub fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     for c in s.chars() {
         match c {

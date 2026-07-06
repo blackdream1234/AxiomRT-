@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kernel", "tools/axiomctl"]
+members = ["kernel", "tools/axiomctl", "studio"]
 # Only the kernel builds by default: the workspace's default cargo
 # target is bare-metal riscv64 (.cargo/config.toml), which cannot host
 # the std-based axiomctl CLI. Build the CLI with an explicit host

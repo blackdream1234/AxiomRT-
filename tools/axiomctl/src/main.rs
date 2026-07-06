@@ -7,7 +7,7 @@
 //! cargo commands; never re-implements a verification step. std only,
 //! zero external dependencies.
 
-mod events;
+use axiomctl::{events, repo_root};
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -73,22 +73,6 @@ fn main() -> ExitCode {
 // ---------------------------------------------------------------------
 // Repository discovery and process helpers
 // ---------------------------------------------------------------------
-
-/// Walk up from the current directory to the repository root, identified
-/// by `scripts/verify_all.sh` next to `kernel/Cargo.toml`.
-fn repo_root() -> Option<PathBuf> {
-    let mut dir = env::current_dir().ok()?;
-    loop {
-        if dir.join("scripts/verify_all.sh").is_file()
-            && dir.join("kernel/Cargo.toml").is_file()
-        {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
 
 fn require_repo_root() -> Result<PathBuf, ExitCode> {
     repo_root().ok_or_else(|| {

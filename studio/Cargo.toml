@@ -1,0 +1,13 @@
+# AxiomRT Studio — local dashboard (AXIOM-STUDIO-001).
+# Requirement reference: docs/24_STUDIO.md.
+# Host-side tool; std only. The single dependency is the in-repo
+# axiomctl library (shared event parser, docs/21 contract) — no
+# external crates.
+
+[package]
+name = "studio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axiomctl = { path = "../tools/axiomctl" }

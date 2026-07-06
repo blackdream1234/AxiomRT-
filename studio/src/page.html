@@ -1,0 +1,335 @@
+<!doctype html>
+<!-- AxiomRT Studio dashboard shell (AXIOM-STUDIO-001..009, docs/24).
+     Served embedded by studio/src/main.rs; no external assets. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AxiomRT Studio</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --border: #d8dce2;
+    --ink: #1a2029; --ink-2: #4a5462; --ink-3: #8a93a1;
+    --accent: #2d5aa0;
+    --good-bg: #e2f2e6; --good-ink: #1d6b34;
+    --warn-bg: #fdf0d7; --warn-ink: #8a5a00;
+    --crit-bg: #fbe3e1; --crit-ink: #a02c22;
+    --chip-bg: #eceff3; --chip-ink: #4a5462;
+    --row-alert: #fdf3f2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c; --surface: #1c2027; --border: #333a45;
+      --ink: #e6e9ee; --ink-2: #aab3bf; --ink-3: #6f7987;
+      --accent: #7ea6dd;
+      --good-bg: #1d3a26; --good-ink: #8fd3a3;
+      --warn-bg: #3d3115; --warn-ink: #e5bd6d;
+      --crit-bg: #46221f; --crit-ink: #eb9d95;
+      --chip-bg: #272d36; --chip-ink: #aab3bf;
+      --row-alert: #2b2224;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, sans-serif; display: flex; min-height: 100vh;
+  }
+  nav {
+    width: 190px; flex: none; border-right: 1px solid var(--border);
+    padding: 14px 0; background: var(--surface);
+  }
+  nav h1 { font-size: 15px; margin: 0 16px 12px; }
+  nav h1 small { display: block; color: var(--ink-3); font-weight: 400; font-size: 11px; }
+  nav a {
+    display: block; padding: 6px 16px; color: var(--ink-2);
+    text-decoration: none; border-left: 3px solid transparent;
+  }
+  nav a.active { color: var(--ink); border-left-color: var(--accent); background: var(--bg); }
+  main { flex: 1; padding: 20px 24px; max-width: 1100px; }
+  section { display: none; }
+  section.active { display: block; }
+  h2 { font-size: 16px; margin: 0 0 4px; }
+  .sub { color: var(--ink-3); font-size: 12px; margin: 0 0 14px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px; margin-bottom: 14px;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th { text-align: left; color: var(--ink-3); font-weight: 500; }
+  th, td { padding: 5px 10px 5px 0; border-bottom: 1px solid var(--border); }
+  tr.alert td { background: var(--row-alert); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  pre {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; overflow: auto; max-height: 420px; font-size: 12px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    padding: 7px 14px; font-size: 13px; cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  button.secondary { background: var(--chip-bg); color: var(--ink); border: 1px solid var(--border); }
+  .chip {
+    display: inline-block; padding: 1px 9px; border-radius: 999px;
+    font-size: 12px; background: var(--chip-bg); color: var(--chip-ink);
+  }
+  .chip.ok      { background: var(--good-bg); color: var(--good-ink); }
+  .chip.running { background: var(--warn-bg); color: var(--warn-ink); }
+  .chip.failed  { background: var(--crit-bg); color: var(--crit-ink); }
+  .kv { display: grid; grid-template-columns: 220px 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv .k { color: var(--ink-3); }
+  .note { color: var(--ink-3); font-size: 12px; }
+  .filelist a { color: var(--accent); cursor: pointer; margin-right: 10px; }
+</style>
+</head>
+<body data-palette="none — no chart series on this page; status chips carry text labels">
+<nav>
+  <h1>AxiomRT Studio<small>local dashboard — evaluation evidence</small></h1>
+  <a href="/" data-p="home">Status</a>
+  <a href="/run" data-p="run">Run demo</a>
+  <a href="/tasks" data-p="tasks">Tasks</a>
+  <a href="/scheduler" data-p="scheduler">Scheduler</a>
+  <a href="/faults" data-p="faults">Faults</a>
+  <a href="/ipc" data-p="ipc">IPC</a>
+  <a href="/capabilities" data-p="capabilities">Capabilities</a>
+  <a href="/tests" data-p="tests">Tests</a>
+  <a href="/proofs" data-p="proofs">Proofs</a>
+  <a href="/evidence" data-p="evidence">Evidence</a>
+  <a href="/limitations" data-p="limitations">Limitations</a>
+  <a href="/release" data-p="release">Release</a>
+</nav>
+<main>
+
+<section data-p="home">
+  <h2>System status</h2>
+  <p class="sub">Host toolchain and job states. AxiomRT is an evaluation-stage system; no certification claim is made.</p>
+  <div class="card"><div class="kv" id="doctor"></div></div>
+  <div class="card">
+    <div class="kv">
+      <span class="k">Full demo run</span><span id="st-demo"><span class="chip">idle</span></span>
+      <span class="k">Verification sweep</span><span id="st-verify"><span class="chip">idle</span></span>
+      <span class="k">Kit build</span><span id="st-kit"><span class="chip">idle</span></span>
+    </div>
+  </div>
+</section>
+
+<section data-p="run">
+  <h2>Full fault-containment demo</h2>
+  <p class="sub">Builds the demo_full kernel, boots QEMU for a bounded window, captures the serial evidence (docs/20_FULL_DEMO.md).</p>
+  <div class="card">
+    <button id="btn-demo">Run full demo</button>
+    <span id="st-demo2" style="margin-left:10px"><span class="chip">idle</span></span>
+  </div>
+  <div class="card">
+    <h2 style="font-size:14px">Terminal output</h2>
+    <pre id="demo-log">no run yet</pre>
+  </div>
+  <div class="card">
+    <h2 style="font-size:14px">Event timeline</h2>
+    <p class="note" id="timeline-note"></p>
+    <table id="timeline"><thead><tr><th>#</th><th>category</th><th>kind</th><th>detail</th></tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section data-p="tasks">
+  <h2>Tasks</h2>
+  <p class="sub">Derived from the last demo run's events (TASK_STARTED / FAULT / RECOVERY_APPLIED).</p>
+  <div class="card"><table id="tasks"><thead><tr><th>task</th><th>last observed state</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section data-p="scheduler">
+  <h2>Scheduler</h2>
+  <p class="sub">SCHED selections per task in the last demo run — the critical task must keep being selected after the faulty task is contained.</p>
+  <div class="card"><table id="sched"><thead><tr><th>task</th><th class="num">times selected</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section data-p="faults">
+  <h2>Faults</h2>
+  <p class="sub">FAULT / CONTAIN / watchdog events from the last demo run.</p>
+  <div class="card"><table id="faults"><thead><tr><th>#</th><th>kind</th><th>detail</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section data-p="ipc">
+  <h2>IPC</h2>
+  <p class="sub">Synchronous bounded copy-based IPC events from the last demo run.</p>
+  <div class="card"><table id="ipc"><thead><tr><th>#</th><th>detail</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section data-p="capabilities">
+  <h2>Capability denials</h2>
+  <p class="sub">Deny-by-default enforcement: CAP_DENIED events from the last demo run.</p>
+  <div class="card"><table id="caps"><thead><tr><th>#</th><th>detail</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section data-p="tests">
+  <h2>Test results</h2>
+  <p class="sub">Full sweep: 9 QEMU serial-assertion tests, host suites, Coq models (scripts/verify_all.sh).</p>
+  <div class="card">
+    <button id="btn-verify">Run verification sweep</button>
+    <span id="st-verify2" style="margin-left:10px"><span class="chip">idle</span></span>
+    <span class="note" style="margin-left:10px">takes a few minutes</span>
+  </div>
+  <div class="card"><pre id="verify-log">loading…</pre></div>
+</section>
+
+<section data-p="proofs">
+  <h2>Proof status</h2>
+  <p class="sub">Coq model-level theorems; refinement to the implementation is explicitly TODO.</p>
+  <div class="card">
+    <p>Model-level theorems are <strong>proven and compiled</strong> for memory isolation, capability access, and scheduler priority (proofs/coq/). The <strong>model-to-code refinement is not discharged</strong> — that boundary is stated in every proof file and in kit/LIMITATIONS.md, and no claim in this dashboard exceeds it.</p>
+    <pre id="coq-log">run the verification sweep to see the Coq section</pre>
+  </div>
+</section>
+
+<section data-p="evidence">
+  <h2>Evidence archive</h2>
+  <p class="sub">Per-version archives: serial transcripts, test logs, tool versions, git commit.</p>
+  <div class="card filelist" id="evidence-list">loading…</div>
+  <div class="card"><pre id="evidence-view">select a file</pre></div>
+</section>
+
+<section data-p="limitations">
+  <h2>Limitations</h2>
+  <p class="sub">Read this before drawing any conclusion (kit/LIMITATIONS.md).</p>
+  <div class="card"><pre id="limitations-view">loading…</pre></div>
+</section>
+
+<section data-p="release">
+  <h2>Release</h2>
+  <p class="sub">Hygiene checklist and evaluation-kit assembly (release/ is generated, never committed).</p>
+  <div class="card">
+    <button id="btn-check" class="secondary">Run release check</button>
+    <button id="btn-kit">Assemble evaluation kit</button>
+    <span id="st-kit2" style="margin-left:10px"><span class="chip">idle</span></span>
+  </div>
+  <div class="card"><pre id="release-view">no check run yet</pre></div>
+</section>
+
+</main>
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (t) => t.replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+// ---- panel routing (server serves this shell on every page path) ----
+const path = location.pathname;
+const panel = {"/":"home","/run":"run","/tasks":"tasks","/scheduler":"scheduler",
+  "/faults":"faults","/ipc":"ipc","/capabilities":"capabilities","/tests":"tests",
+  "/proofs":"proofs","/evidence":"evidence","/limitations":"limitations",
+  "/release":"release"}[path] || "home";
+document.querySelectorAll("section").forEach(s =>
+  s.classList.toggle("active", s.dataset.p === panel));
+document.querySelectorAll("nav a").forEach(a =>
+  a.classList.toggle("active", a.dataset.p === panel));
+
+// ---- state polling ----
+let lastDemoStatus = null, lastVerifyStatus = null;
+function chip(status) {
+  const cls = {ok:"ok", running:"running", failed:"failed"}[status] || "";
+  const label = {idle:"idle", running:"running…", ok:"PASS", failed:"FAIL"}[status] || status;
+  return `<span class="chip ${cls}">${label}</span>`;
+}
+async function poll() {
+  try {
+    const st = await (await fetch("/api/state")).json();
+    for (const [job, ids] of [["demo",["#st-demo","#st-demo2"]],
+                              ["verify",["#st-verify","#st-verify2"]],
+                              ["kit",["#st-kit","#st-kit2"]]]) {
+      ids.forEach(id => { const el = $(id); if (el) el.innerHTML = chip(st[job].status); });
+    }
+    $("#btn-demo").disabled = $("#btn-verify").disabled = $("#btn-kit").disabled = !!st.busy;
+    $("#doctor").innerHTML = st.doctor.map(([k,v]) =>
+      `<span class="k">${esc(k)}</span><span>${esc(v)}</span>`).join("");
+    if (st.demo.status === "running" || st.demo.status !== lastDemoStatus) {
+      lastDemoStatus = st.demo.status;
+      if (st.demo.status !== "idle") { loadDemoLog(); loadEvents(); }
+    }
+    if (st.verify.status !== lastVerifyStatus) {
+      lastVerifyStatus = st.verify.status;
+      loadVerifyLog();
+    }
+    setTimeout(poll, st.busy ? 1000 : 4000);
+  } catch (e) { setTimeout(poll, 4000); }
+}
+
+async function loadDemoLog() {
+  const t = await (await fetch("/api/log")).text();
+  const pre = $("#demo-log");
+  pre.textContent = t || "no run yet";
+  pre.scrollTop = pre.scrollHeight;
+}
+
+function rows(tbody, html) { $(tbody + " tbody").innerHTML = html; }
+async function loadEvents() {
+  const d = await (await fetch("/api/events")).json();
+  $("#timeline-note").textContent =
+    `${d.total} events parsed (${d.skipped} non-event lines skipped)` +
+    (d.total > d.shown ? `; timeline shows the first ${d.shown}` : "");
+  const alertCat = (c) => ["fault","watchdog","capability"].includes(c);
+  rows("#timeline", d.events.map(e =>
+    `<tr class="${alertCat(e.category) ? "alert" : ""}"><td class="num">${e.seq}</td>` +
+    `<td><span class="chip">${esc(e.category)}</span></td><td>${esc(e.kind)}</td>` +
+    `<td>${esc(detail(e))}</td></tr>`).join(""));
+  rows("#tasks", d.tasks.map(([t,s]) =>
+    `<tr class="${s==="faulted"||s==="killed" ? "alert" : ""}"><td>${esc(t)}</td><td>${esc(s)}</td></tr>`).join(""));
+  rows("#sched", d.sched.map(([t,n]) =>
+    `<tr><td>${esc(t)}</td><td class="num">${n.toLocaleString()}</td></tr>`).join(""));
+  const evRows = (cats, cols) => d.events
+    .filter(e => cats.includes(e.category))
+    .map(e => `<tr><td class="num">${e.seq}</td>` +
+      (cols === 2 ? `<td>${esc(e.raw)}</td>` : `<td>${esc(e.kind)}</td><td>${esc(detail(e))}</td>`) +
+      `</tr>`).join("");
+  rows("#faults", evRows(["fault","watchdog"], 3));
+  rows("#ipc", evRows(["ipc"], 2));
+  rows("#caps", evRows(["capability"], 2));
+}
+function detail(e) {
+  const flags = e.flags.join(" ");
+  const fields = Object.entries(e.fields).map(([k,v]) => `${k}=${v}`).join("  ");
+  return (flags ? flags + "  " : "") + fields;
+}
+
+async function loadVerifyLog() {
+  const t = await (await fetch("/api/verify_log")).text();
+  $("#verify-log").textContent = t;
+  const coq = t.split("=== coq models ===")[1];
+  $("#coq-log").textContent = coq ? "=== coq models ===" + coq : $("#coq-log").textContent;
+}
+
+async function loadEvidence() {
+  const d = await (await fetch("/api/evidence")).json();
+  $("#evidence-list").innerHTML = d.versions.map(v =>
+    `<div><strong>${esc(v.name)}</strong>: ` +
+    v.files.map(f => `<a data-ver="${esc(v.name)}" data-file="${esc(f)}">${esc(f)}</a>`).join("") +
+    `</div>`).join("");
+  document.querySelectorAll("#evidence-list a").forEach(a => a.onclick = async () => {
+    const t = await (await fetch(`/api/evidence/file?ver=${a.dataset.ver}&file=${a.dataset.file}`)).text();
+    $("#evidence-view").textContent = t;
+  });
+}
+
+async function loadDoc() {
+  $("#limitations-view").textContent = await (await fetch("/api/doc?name=limitations")).text();
+}
+
+async function releaseCheck() {
+  $("#release-view").textContent = "running…";
+  const d = await (await fetch("/api/release_check")).json();
+  $("#release-view").textContent = d.text;
+}
+
+const post = (url) => fetch(url, {method: "POST"});
+$("#btn-demo").onclick = () => post("/api/run_demo");
+$("#btn-verify").onclick = () => post("/api/run_verify");
+$("#btn-kit").onclick = () => post("/api/kit_build");
+$("#btn-check").onclick = releaseCheck;
+
+poll();
+loadVerifyLog();
+loadEvidence();
+loadDoc();
+if (panel === "run") { loadDemoLog(); loadEvents(); }
+</script>
+</body>
+</html>
