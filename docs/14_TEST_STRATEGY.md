@@ -81,3 +81,22 @@ docs/09_SCHEDULER_MODEL.md §4). Mandatory cases:
   (SCHED-P3)
 
 All cases must pass with no hardware dependency before Phase 7.
+
+## Memory Isolation QEMU Tests (AXIOM-MEMHW-009..011, v0.2)
+
+Script: `tests/memory_isolation_qemu_test.sh` — boots the kernel under
+Sv39 and asserts that forbidden user memory accesses take the expected
+page fault, are contained, and the kernel survives. Cases (each selects
+the demo probe via a cargo feature; the default build is restored at the
+end):
+
+* read of kernel memory → load page fault,
+  `reason=user_access_kernel_memory` (MEMHW-009);
+* write of an unmapped user address → store page fault,
+  `reason=user_access_unmapped` (MEMHW-010);
+* execute of a non-executable user page → instruction page fault,
+  `reason=user_execute_nonexecutable` (MEMHW-011).
+
+Each case asserts `MMU status=enabled` and `kernel=survived`. This is
+the v0.2 gate evidence that memory isolation is MMU-enforced for the
+tested cases.
