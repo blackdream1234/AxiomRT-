@@ -28,7 +28,7 @@ complete over time (Project Description §20).
 
 | Target | Statement | File | Status |
 |---|---|---|---|
-| Memory isolation | a task cannot read/write an address not mapped in its address space; distinct tasks never reach the same frame under no-sharing | proofs/coq/MemoryIsolation.v | theorems proven at model level; refinement TODO |
+| Memory isolation | a task cannot read/write an address not mapped in its address space; distinct tasks never reach the same frame under no-sharing; Sv39 leaf-PTE encoding keeps kernel frames non-user and user leaves W^X (v0.2) | proofs/coq/MemoryIsolation.v | model theorems + Sv39 encoding lemmas proven; full Rust refinement TODO |
 | Capability access | a task cannot invoke a protected object without a valid capability with sufficient rights; rights never grow by derivation | proofs/coq/CapabilityAccess.v | theorems proven at model level; refinement TODO |
 | Scheduler priority | if a high-priority ready task exists, a lower-priority task is not selected; non-ready tasks are never selected | proofs/coq/SchedulerPriority.v | spec-level theorems proven; concrete-function refinement TODO |
 | Fault containment | a user-space fault cannot corrupt kernel state | (v0.2+, after MMU activation) | planned |

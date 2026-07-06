@@ -117,3 +117,59 @@ Proof.
      reserves the obligation's place in the build. *)
   exact I.
 Qed.
+
+(* ----------------------------------------------------------------- *)
+(* Sv39 refinement note (AXIOM-MEMHW-012).
+   v0.2 activated the Sv39 MMU (kernel/src/arch/riscv64/sv39.rs,
+   paging.rs, paging_hw.rs; docs/12_MMU_SV39.md). The concrete leaf-PTE
+   encoding is intended to realize MEM-P1: the U bit of a leaf PTE
+   corresponds to the model's USER accessibility, and no kernel frame is
+   ever encoded with the U bit set.
+
+   We model the relevant PTE fields abstractly and state the two
+   refinement properties the Rust `Pte::leaf` constructor already
+   enforces by construction (rejecting user W^X and never setting U on a
+   kernel mapping). These are stated here; the full machine-checked
+   refinement against the extracted Rust remains TODO (see
+   docs/11_VERIFICATION_PLAN.md §2, row "Memory isolation").          *)
+
+Record LeafPte := mkLeaf {
+  pte_user : bool;     (* U bit *)
+  pte_write : bool;    (* W bit *)
+  pte_exec : bool;     (* X bit *)
+  pte_kernel_frame : bool (* frame lies in the kernel physical range *)
+}.
+
+(* The encoding invariant the constructor guarantees (sv39.rs::leaf):
+   - a kernel-frame leaf never carries the user bit (MEM-P1 encoding);
+   - a user leaf is never simultaneously writable and executable
+     (MEM-P5 encoding). *)
+Definition pte_wellformed (p : LeafPte) : Prop :=
+  (pte_kernel_frame p = true -> pte_user p = false)
+  /\ (pte_user p = true -> ~ (pte_write p = true /\ pte_exec p = true)).
+
+(* MEM-P1 at the encoding level: a well-formed leaf mapping a kernel
+   frame is not user-accessible. Discharged directly from the invariant;
+   the remaining obligation is that `Pte::leaf` always yields a
+   well-formed PTE (enforced in Rust, TODO to mirror in Coq).          *)
+Theorem sv39_kernel_frame_not_user :
+  forall p, pte_wellformed p -> pte_kernel_frame p = true -> pte_user p = false.
+Proof.
+  intros p [Hk _] Hkf. exact (Hk Hkf).
+Qed.
+
+Theorem sv39_user_leaf_not_wx :
+  forall p, pte_wellformed p -> pte_user p = true ->
+    ~ (pte_write p = true /\ pte_exec p = true).
+Proof.
+  intros p [_ Hwx] Hu. exact (Hwx Hu).
+Qed.
+
+Theorem sv39_encoding_refines_memp1 : True.
+Proof.
+  (* TODO(refinement): connect pte_wellformed to the Rust
+     kernel/src/arch/riscv64/sv39.rs::leaf constructor (which rejects
+     every ill-formed combination) and to the AddressSpace model of this
+     file, so that MEM-P1 transfers to the running Sv39 tables. *)
+  exact I.
+Qed.
