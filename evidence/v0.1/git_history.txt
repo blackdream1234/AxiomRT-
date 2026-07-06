@@ -1,0 +1,49 @@
+119837e (HEAD -> main) chore: import Full Completion Mode master roadmap
+61cfa64 chore: track Cargo.lock, ignore Coq lia cache
+3fc3d99 chore: ignore nested target dirs, untrack supervisor build artifacts
+29c75e3 chore: update README and docs index to v0.1 state
+cafad3f AXIOM-KIT-002: create demo scenario documentation
+e804c86 AXIOM-KIT-001: create industrial evaluation kit definition
+4550ec7 AXIOM-PROOF-003: create Coq model for scheduler priority
+9b40d14 AXIOM-PROOF-002: create Coq model for capability access
+5e3bc66 AXIOM-PROOF-001: create Coq model for memory isolation
+55e17d8 AXIOM-MON-002: add serial event export for QEMU
+3c74f40 AXIOM-MON-001: create kernel event model
+ee85649 AXIOM-FAULT-003: create supervisor notification path
+fe50123 AXIOM-FAULT-002: add basic fault handling policy
+28f3558 AXIOM-FAULT-001: create FaultEvent model
+7347ba1 AXIOM-CAP-003: integrate capabilities into IPC
+451e1b7 AXIOM-CAP-002: add capability lookup table
+18c1d34 AXIOM-CAP-001: create capability model
+ffb1515 AXIOM-IPC-002: add synchronous send/receive logic
+1be0c2c AXIOM-IPC-001: create IPC object model
+81caf5d AXIOM-USER-002: implement first controlled transition to user mode
+ed24149 AXIOM-USER-001: define user task image model
+77403ae AXIOM-SCHED-002: add scheduler tests
+398e0d3 AXIOM-SCHED-001: create scheduler model skeleton
+5994859 AXIOM-THREAD-002: add RISC-V register context structure
+e14b41e AXIOM-THREAD-001: create thread object model
+1867783 AXIOM-MEM-003: add page table model skeleton
+dca1fa9 AXIOM-MEM-002: add physical frame lifecycle model
+9d725e8 AXIOM-MEM-001: add typed addresses and range constants
+d03d194 AXIOM-TRAP-003: add syscall trap stub
+64d8a59 AXIOM-TRAP-002: add illegal instruction handler
+f3dd90e AXIOM-TRAP-001: add RISC-V trap vector skeleton
+a302cad AXIOM-BOOT-005: add QEMU boot smoke test
+6dfe027 AXIOM-BOOT-004: add QEMU run script
+13609c7 AXIOM-BOOT-003: add QEMU UART boot banner
+d94e8e2 AXIOM-BOOT-002: add RISC-V boot entry and linker script
+9bbcd72 AXIOM-BOOT-001: create no_std kernel crate structure
+493364c AXIOM-REPO-003: add documentation index
+ac2ff6e AXIOM-REPO-002: write full README
+797d366 AXIOM-REPO-001: create repository skeleton
+7652a5f AXIOM-DOC-009: add phase 0 gate
+2a827e5 AXIOM-DOC-008: add codex rules
+ca212b2 AXIOM-DOC-007: define fault model
+18d44bc AXIOM-DOC-006: define memory model
+8b0c589 AXIOM-DOC-005: define syscall model
+183ed37 AXIOM-DOC-004: define kernel objects
+2b9e00b AXIOM-DOC-003: add kernel blueprint
+7de1bdf AXIOM-DOC-002: define scope and non-goals
+6330f89 AXIOM-DOC-001: add project charter
+5e6c9c9 chore: import AxiomRT prompt pack and project description

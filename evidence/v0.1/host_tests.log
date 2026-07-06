@@ -1,0 +1,172 @@
+warning: value assigned to `src` is never read
+  --> kernel/src/ipc/message.rs:91:9
+   |
+91 |         src[0] = 0; // mutating the source after send must not matter
+   |         ^^^^^^^^^^
+   |
+   = help: maybe it is overwritten before being read?
+   = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> kernel/src/fault/mod.rs:147:13
+    |
+147 |         let mut critical = live_thread(1);
+    |             ----^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kernel` (lib test) generated 2 warnings (run `cargo fix --lib -p kernel --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running unittests src/lib.rs (target/x86_64-unknown-linux-gnu/debug/deps/kernel-fd27f98c3ee5659d)
+
+running 75 tests
+test caps::rights::tests::all_eight_rights_are_distinct ... ok
+test caps::rights::tests::contains_is_subset_test ... ok
+test caps::capability::tests::derivation_only_diminishes ... ok
+test caps::rights::tests::diminish_never_amplifies ... ok
+test fault::event::tests::lifecycle_forward_chain_only ... ok
+test caps::capability::tests::capability_carries_object_and_rights ... ok
+test fault::event::tests::payload_is_immutable_by_construction ... ok
+test fault::event::tests::skipping_and_rewinding_rejected ... ok
+test fault::policy_tests::containment_preserves_other_tasks ... ok
+test fault::policy_tests::faulting_a_dead_thread_is_an_invariant_violation ... ok
+test fault::policy_tests::kernel_fault_triggers_panic_path ... ok
+test fault::policy_tests::user_fault_is_contained_and_marks_thread_faulted ... ok
+test fault::wire::tests::bounded_channel_falls_back_to_default_policy ... ok
+test fault::wire::tests::decode_rejects_forged_and_corrupt_reports ... ok
+test fault::policy_tests::kernel_invariant_violation_from_user_scope_is_panic ... ok
+test fault::wire::tests::fault_event_reaches_supervisor_through_checked_ipc ... ok
+test fault::wire::tests::recovery_decisions_are_validated ... ok
+test fault::wire::tests::supervisor_cannot_bypass_capabilities ... ok
+test fault::wire::tests::wire_round_trip ... ok
+test ipc::endpoint::tests::endpoints_start_idle_and_empty ... ok
+test ipc::message::tests::bounded_construction ... ok
+test ipc::message::tests::max_size_accepted ... ok
+test ipc::message::tests::message_is_a_copy_not_a_view ... ok
+test ipc::message::tests::oversized_rejected_before_copy ... ok
+test memory::address::tests::distinct_types_prevent_confusion ... ok
+test memory::address::tests::kernel_and_user_ranges_are_disjoint ... ok
+test memory::address::tests::page_alignment ... ok
+test memory::frame::tests::double_allocate_rejected ... ok
+test memory::frame::tests::double_free_rejected ... ok
+test memory::frame::tests::free_pool_is_not_an_allocation_owner ... ok
+test memory::frame::tests::lifecycle_happy_path ... ok
+test memory::frame::tests::mapped_frame_cannot_be_freed ... ok
+test memory::frame::tests::quarantine_is_terminal ... ok
+test memory::pagetable::tests::device_mapping_is_kernel_only ... ok
+test memory::pagetable::tests::double_mapping_same_page_rejected ... ok
+test memory::pagetable::tests::foreign_frame_rejected ... ok
+test memory::pagetable::tests::kernel_frame_never_user_mapped ... ok
+test memory::pagetable::tests::map_and_lookup_user_page ... ok
+test memory::pagetable::tests::mapped_frame_cannot_be_mapped_twice ... ok
+test memory::pagetable::tests::misaligned_rejected ... ok
+test memory::pagetable::tests::unmap_returns_frame_to_allocated ... ok
+test memory::pagetable::tests::user_page_must_be_in_user_window ... ok
+test memory::pagetable::tests::wx_user_mapping_rejected ... ok
+test monitor::event::tests::names_are_the_documented_nine ... ok
+test monitor::event::tests::optional_fields_default_absent ... ok
+test memory::pagetable::tests::table_capacity_is_bounded ... ok
+test monitor::event::tests::severity_is_derived ... ok
+test monitor::serial::tests::export_appends_newline_through_sink ... ok
+test monitor::serial::tests::optional_fields_appear_only_when_present ... ok
+test monitor::serial::tests::renders_mandatory_fields_in_stable_format ... ok
+test monitor::serial::tests::worst_case_line_fits_without_truncation ... ok
+test sched::priority::tests::ordering_follows_urgency ... ok
+test sched::priority::tests::range_is_enforced ... ok
+test sched::queue::tests::capacity_is_bounded ... ok
+test sched::queue::tests::double_enqueue_rejected ... ok
+test sched::queue::tests::fifo_within_level ... ok
+test sched::queue::tests::higher_level_first ... ok
+test sched::queue::tests::remove_preserves_order ... ok
+test sched::tests::idle_when_empty ... ok
+test sched::tests::selects_highest_priority_ready_thread ... ok
+test sched::tests::stale_not_ready_entries_are_never_selected ... ok
+test thread::context::arch::tests::layout_is_fixed_and_complete ... ok
+test thread::context::tests::default_context_is_not_runnable ... ok
+test thread::context::tests::null_resume_or_stack_rejected ... ok
+test thread::context::tests::valid_context_is_runnable ... ok
+test thread::state::tests::blocked_unblocks_to_ready_not_running ... ok
+test thread::state::tests::faulted_never_returns_to_execution ... ok
+test thread::state::tests::killed_is_terminal ... ok
+test thread::state::tests::no_self_transitions ... ok
+test thread::state::tests::only_ready_becomes_running ... ok
+test thread::tests::born_ready ... ok
+test thread::tests::faulted_thread_never_scheduled_again ... ok
+test thread::tests::killed_thread_is_immutable ... ok
+test thread::tests::run_yield_cycle ... ok
+test fault::event::tests::severity_is_derived_not_chosen ... ok
+
+test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/x86_64-unknown-linux-gnu/debug/deps/kernel-3c4589ea75fde8d5)
+
+running 4 tests
+test user::image::tests::valid_image_accepted ... ok
+test user::image::tests::stack_geometry_validated ... ok
+test user::image::tests::stack_must_stay_in_user_window ... ok
+test user::image::tests::kernel_entry_rejected ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../tests/capability_tests.rs (target/x86_64-unknown-linux-gnu/debug/deps/capability_tests-9f3d8fa324523f2c)
+
+running 7 tests
+test insert_rules ... ok
+test lookup_valid_capability ... ok
+test query_reveals_own_authority_only_as_metadata ... ok
+test reject_insufficient_rights ... ok
+test reject_missing_capability ... ok
+test revoked_capability_fails_lookup ... ok
+test reject_wrong_object_type ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../tests/ipc_capability_tests.rs (target/x86_64-unknown-linux-gnu/debug/deps/ipc_capability_tests-9cd8d946d873752f)
+
+running 7 tests
+test ipc_without_capability_fails ... ok
+test capability_is_bound_to_its_endpoint ... ok
+test ipc_with_capability_succeeds ... ok
+test recv_requires_receive_right ... ok
+test revoked_capability_stops_ipc ... ok
+test wrong_object_type_rejected ... ok
+test send_requires_send_right ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../tests/ipc_tests.rs (target/x86_64-unknown-linux-gnu/debug/deps/ipc_tests-a11217d1fbe78125)
+
+running 10 tests
+test bounded_message_size_enforced_before_copy ... ok
+test bounded_no_second_sender_queue ... ok
+test cancel_parked_sender_drops_message_undelivered ... ok
+test cancel_non_waiting_thread_is_noop ... ok
+test copy_semantics_no_shared_memory ... ok
+test deterministic_same_history_same_outcome ... ok
+test receiver_first_rendezvous_delivers_to_waiting_receiver ... ok
+test recv_blocks_if_no_sender ... ok
+test send_blocks_if_no_receiver ... ok
+test sender_first_rendezvous_delivers_and_unblocks ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../tests/scheduler_tests.rs (target/x86_64-unknown-linux-gnu/debug/deps/scheduler_tests-79275fc44a604cc5)
+
+running 6 tests
+test blocked_task_not_selected ... ok
+test equal_priority_uses_deterministic_fifo_rule ... ok
+test faulted_task_not_selected ... ok
+test highest_priority_task_selected ... ok
+test killed_task_not_selected ... ok
+test killed_task_not_selected_even_if_still_queued ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kernel
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

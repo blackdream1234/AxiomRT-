@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running unittests src/lib.rs (userland/supervisor/target/x86_64-unknown-linux-gnu/debug/deps/supervisor-f77621e53470f012)
+
+running 4 tests
+test tests::empty_channel_reports_nothing_pending ... ok
+test tests::no_capability_means_no_fault_events ... ok
+test tests::policy_matches_documented_defaults ... ok
+test tests::fault_event_reaches_supervisor_and_yields_explicit_decision ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests supervisor
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
