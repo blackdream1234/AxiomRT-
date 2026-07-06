@@ -1,0 +1,7 @@
+ok: TASK_STARTED task=faulty_task
+ok: CAP_DENIED task=faulty_task reason=no_valid_capability
+ok: IPC state=unchanged
+ok: IPC send task=good_sender
+ok: IPC delivered bytes=4
+ok: no PANIC
+PASS: capability enforcement test

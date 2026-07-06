@@ -1,0 +1,22 @@
+MMU status=enabled mode=sv39 scope=kernel
+TASK_STARTED task=receiver
+TASK_STARTED task=faulty_task
+TASK_STARTED task=good_sender
+IPC recv task=receiver
+IPC endpoint=log op=recv state=blocked
+SCHED selected=faulty_task
+CAP_DENIED task=faulty_task reason=no_valid_capability
+IPC state=unchanged
+SYSCALL name=sys_exit task=faulty_task
+TASK_EXITED task=faulty_task
+SCHED selected=good_sender
+IPC send task=good_sender
+IPC endpoint=log op=send
+SYSCALL name=sys_exit task=good_sender
+TASK_EXITED task=good_sender
+SCHED selected=receiver
+IPC delivered bytes=4
+SYSCALL name=sys_exit task=receiver
+TASK_EXITED task=receiver
+SCHED idle=all_tasks_done
+KERNEL alive=true
