@@ -110,7 +110,11 @@ const EMPTY_TCB: Tcb = Tcb {
     state: RtState::Empty,
     prio: 0,
     satp_root: 0,
-    frame: TrapFrame { regs: [0; 31], sepc: 0, sstatus: 0 },
+    frame: TrapFrame {
+        regs: [0; 31],
+        sepc: 0,
+        sstatus: 0,
+    },
     pending_ipc: None,
     caps: [None; CAPS_PER_TASK],
     name: "",
@@ -207,7 +211,11 @@ pub unsafe fn register_task(
 pub unsafe fn set_endpoint_cap(idx: usize, slot: usize, object_id: u32, rights: u16) {
     // SAFETY: exclusive boot-time access.
     let tasks = tasks_mut();
-    tasks[idx].caps[slot] = Some(Cap { otype: OTYPE_ENDPOINT, object_id, rights });
+    tasks[idx].caps[slot] = Some(Cap {
+        otype: OTYPE_ENDPOINT,
+        object_id,
+        rights,
+    });
 }
 
 /// Resolve `cap_index` in task `cur`'s table for an endpoint capability
@@ -315,7 +323,9 @@ fn clear_sum() {
 fn valid_user_buf(va: u64, len: usize) -> bool {
     len <= IPC_MSG_MAX
         && va >= USER_DATA_VA
-        && va.checked_add(len as u64).is_some_and(|end| end <= USER_DATA_END)
+        && va
+            .checked_add(len as u64)
+            .is_some_and(|end| end <= USER_DATA_END)
 }
 
 /// Copy `len` bytes from the running task's user buffer into KMSG. The
@@ -323,9 +333,9 @@ fn valid_user_buf(va: u64, len: usize) -> bool {
 fn copy_from_user(va: u64, len: usize) {
     set_sum();
     let kmsg = unsafe { &mut *addr_of_mut!(KMSG) };
-    for i in 0..len {
+    for (i, byte) in kmsg.iter_mut().enumerate().take(len) {
         // SAFETY: validated user range, SUM set, byte-wise volatile read.
-        kmsg[i] = unsafe { read_volatile((va + i as u64) as *const u8) };
+        *byte = unsafe { read_volatile((va + i as u64) as *const u8) };
     }
     clear_sum();
 }
@@ -581,7 +591,11 @@ fn ipc_send(frame: &mut TrapFrame) {
             if len <= cap && valid_user_buf(dst, len) {
                 // Stage delivery with an embedded payload; the receiver
                 // completes the copy when it next runs (AXIOM-IPCRT-006).
-                let mut pm = PendingMsg { dst, len, data: [0; IPC_MSG_MAX] };
+                let mut pm = PendingMsg {
+                    dst,
+                    len,
+                    data: [0; IPC_MSG_MAX],
+                };
                 pm.data[..len].copy_from_slice(&kmsg[..len]);
                 tasks[tid].pending_ipc = Some(pm);
             } else {
@@ -668,7 +682,11 @@ fn ipc_recv(frame: &mut TrapFrame) {
 fn notify_endpoint(ep_id: u32, code: u8) -> Option<usize> {
     if let Ep::ReceiverWaiting { tid, dst, cap } = ep_get(ep_id) {
         if cap >= 1 && valid_user_buf(dst, 1) {
-            let mut pm = PendingMsg { dst, len: 1, data: [0; IPC_MSG_MAX] };
+            let mut pm = PendingMsg {
+                dst,
+                len: 1,
+                data: [0; IPC_MSG_MAX],
+            };
             pm.data[0] = code;
             let tasks = tasks_mut();
             tasks[tid].pending_ipc = Some(pm);
@@ -693,7 +711,10 @@ const FAULT_CODE_WATCHDOG: u8 = 4;
 /// acknowledges (sys_fault_ack).
 fn notify_supervisor_and_logger(faulted_name: &str) {
     if notify_endpoint(EP_FAULT, FAULT_CODE_WATCHDOG).is_some() {
-        emit("IPC delivered fault_event to=supervisor_task from=", faulted_name);
+        emit(
+            "IPC delivered fault_event to=supervisor_task from=",
+            faulted_name,
+        );
     }
     if notify_endpoint(EP_EVENT, FAULT_CODE_WATCHDOG).is_some() {
         uart::put_str("LOGGER event=TASK_FAULTED task=");

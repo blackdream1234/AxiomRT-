@@ -136,7 +136,10 @@ impl FaultEvent {
             self.state = to;
             Ok(())
         } else {
-            Err(IllegalEventTransition { from: self.state, to })
+            Err(IllegalEventTransition {
+                from: self.state,
+                to,
+            })
         }
     }
 }
@@ -174,7 +177,10 @@ mod tests {
     #[test]
     fn skipping_and_rewinding_rejected() {
         let mut e = event();
-        assert!(e.advance(EventState::Delivered).is_err(), "cannot skip Queued");
+        assert!(
+            e.advance(EventState::Delivered).is_err(),
+            "cannot skip Queued"
+        );
         assert!(e.advance(EventState::Acknowledged).is_err());
         e.advance(EventState::Queued).unwrap();
         assert!(e.advance(EventState::Created).is_err(), "no rewind");

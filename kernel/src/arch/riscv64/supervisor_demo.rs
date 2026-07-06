@@ -35,8 +35,14 @@ extern "C" fn supervisor_body() -> ! {
     unsafe {
         core::arch::asm!(
             "1:",
-            "li a0, 0", "li a1, 0x200040", "li a2, 64", "li a7, 4", "ecall", // recv fault
-            "li a1, 2", "li a7, 7", "ecall", // sys_fault_ack decision=Kill
+            "li a0, 0",
+            "li a1, 0x200040",
+            "li a2, 64",
+            "li a7, 4",
+            "ecall", // recv fault
+            "li a1, 2",
+            "li a7, 7",
+            "ecall", // sys_fault_ack decision=Kill
             "j 1b",
             options(noreturn)
         )
@@ -50,7 +56,11 @@ extern "C" fn logger_body() -> ! {
     unsafe {
         core::arch::asm!(
             "1:",
-            "li a0, 0", "li a1, 0x200040", "li a2, 64", "li a7, 4", "ecall", // recv event
+            "li a0, 0",
+            "li a1, 0x200040",
+            "li a2, 64",
+            "li a7, 4",
+            "ecall", // recv event
             "j 1b",
             options(noreturn)
         )

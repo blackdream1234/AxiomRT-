@@ -96,11 +96,14 @@ pub fn recv(ep: &mut Endpoint, receiver: ThreadId) -> Result<RecvOutcome, IpcErr
             Ok(RecvOutcome::Blocked)
         }
         EndpointState::SenderWaiting { sender } => {
-            let msg = ep.take_pending().expect(
-                "kernel invariant: SenderWaiting implies a pending message",
-            );
+            let msg = ep
+                .take_pending()
+                .expect("kernel invariant: SenderWaiting implies a pending message");
             ep.set_state(EndpointState::Idle);
-            Ok(RecvOutcome::Received { msg, unblock: sender })
+            Ok(RecvOutcome::Received {
+                msg,
+                unblock: sender,
+            })
         }
         EndpointState::ReceiverWaiting { receiver: r } => {
             if r == receiver {

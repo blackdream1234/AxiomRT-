@@ -172,7 +172,8 @@ mod tests {
         assert_eq!(f.state(), FrameState::Free);
         assert_eq!(f.owner(), FrameOwner::FreePool);
 
-        f.allocate(FrameOwner::AddressSpace(AddressSpaceId(1))).unwrap();
+        f.allocate(FrameOwner::AddressSpace(AddressSpaceId(1)))
+            .unwrap();
         assert_eq!(f.state(), FrameState::Allocated);
         f.mark_mapped().unwrap();
         assert_eq!(f.state(), FrameState::Mapped);
@@ -195,13 +196,17 @@ mod tests {
     #[test]
     fn free_pool_is_not_an_allocation_owner() {
         let mut f = frame();
-        assert_eq!(f.allocate(FrameOwner::FreePool), Err(FrameError::InvalidOwner));
+        assert_eq!(
+            f.allocate(FrameOwner::FreePool),
+            Err(FrameError::InvalidOwner)
+        );
     }
 
     #[test]
     fn mapped_frame_cannot_be_freed() {
         let mut f = frame();
-        f.allocate(FrameOwner::AddressSpace(AddressSpaceId(1))).unwrap();
+        f.allocate(FrameOwner::AddressSpace(AddressSpaceId(1)))
+            .unwrap();
         f.mark_mapped().unwrap();
         assert_eq!(f.free(), Err(FrameError::StillMapped));
     }
@@ -217,7 +222,8 @@ mod tests {
     #[test]
     fn quarantine_is_terminal() {
         let mut f = frame();
-        f.allocate(FrameOwner::AddressSpace(AddressSpaceId(3))).unwrap();
+        f.allocate(FrameOwner::AddressSpace(AddressSpaceId(3)))
+            .unwrap();
         f.quarantine().unwrap();
         assert_eq!(f.free(), Err(FrameError::Quarantined));
         assert_eq!(f.mark_mapped(), Err(FrameError::Quarantined));

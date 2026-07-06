@@ -142,7 +142,12 @@ fn cmd_doctor() -> ExitCode {
     let tools: &[(&str, &str, &[&str], bool)] = &[
         ("rustc", "rustc", &["--version"], true),
         ("cargo", "cargo", &["--version"], true),
-        ("qemu-system-riscv64", "qemu-system-riscv64", &["--version"], true),
+        (
+            "qemu-system-riscv64",
+            "qemu-system-riscv64",
+            &["--version"],
+            true,
+        ),
         ("coqc (optional)", "coqc", &["--version"], false),
     ];
 
@@ -168,7 +173,10 @@ fn cmd_doctor() -> ExitCode {
     {
         Ok(out) if out.status.success() => {
             let installed = String::from_utf8_lossy(&out.stdout);
-            if installed.lines().any(|l| l.trim() == "riscv64gc-unknown-none-elf") {
+            if installed
+                .lines()
+                .any(|l| l.trim() == "riscv64gc-unknown-none-elf")
+            {
                 println!("OK       target riscv64gc-unknown-none-elf installed");
             } else {
                 println!(
@@ -243,7 +251,14 @@ fn cmd_demo(full: bool) -> ExitCode {
         let build = run_inherit(
             &root,
             "cargo",
-            &["build", "--release", "--features", "demo_full", "-p", "kernel"],
+            &[
+                "build",
+                "--release",
+                "--features",
+                "demo_full",
+                "-p",
+                "kernel",
+            ],
         );
         if build != ExitCode::SUCCESS {
             return build;
@@ -255,12 +270,17 @@ fn cmd_demo(full: bool) -> ExitCode {
             &root,
             "qemu-system-riscv64",
             &[
-                "-machine", "virt",
-                "-smp", "1",
-                "-m", "128M",
+                "-machine",
+                "virt",
+                "-smp",
+                "1",
+                "-m",
+                "128M",
                 "-nographic",
-                "-bios", "default",
-                "-kernel", "target/riscv64gc-unknown-none-elf/release/kernel",
+                "-bios",
+                "default",
+                "-kernel",
+                "target/riscv64gc-unknown-none-elf/release/kernel",
             ],
         )
     } else {

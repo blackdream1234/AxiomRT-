@@ -45,7 +45,8 @@ impl UserImage {
         if !entry.is_user() {
             return Err(ImageError::EntryOutsideUserWindow);
         }
-        if stack_size == 0 || stack_size % PAGE_SIZE != 0 || !stack_top.is_page_aligned() {
+        if stack_size == 0 || !stack_size.is_multiple_of(PAGE_SIZE) || !stack_top.is_page_aligned()
+        {
             return Err(ImageError::BadStackGeometry);
         }
         let top = stack_top.as_u64();
@@ -57,7 +58,12 @@ impl UserImage {
         if !VirtAddr::new(base).is_user() || !VirtAddr::new(top - 1).is_user() {
             return Err(ImageError::StackOutsideUserWindow);
         }
-        Ok(UserImage { entry, stack_top, stack_size, address_space })
+        Ok(UserImage {
+            entry,
+            stack_top,
+            stack_size,
+            address_space,
+        })
     }
 
     pub const fn entry(&self) -> VirtAddr {
@@ -96,7 +102,12 @@ mod tests {
     #[test]
     fn kernel_entry_rejected() {
         assert_eq!(
-            UserImage::new(VirtAddr::new(0x8020_0000), VirtAddr::new(0x20_0000), PAGE_SIZE, ASID),
+            UserImage::new(
+                VirtAddr::new(0x8020_0000),
+                VirtAddr::new(0x20_0000),
+                PAGE_SIZE,
+                ASID
+            ),
             Err(ImageError::EntryOutsideUserWindow)
         );
         assert_eq!(
@@ -110,12 +121,22 @@ mod tests {
     fn stack_must_stay_in_user_window() {
         // Stack that would underflow below the user window base.
         assert_eq!(
-            UserImage::new(VirtAddr::new(0x1_0000), VirtAddr::new(0x2000), 2 * PAGE_SIZE, ASID),
+            UserImage::new(
+                VirtAddr::new(0x1_0000),
+                VirtAddr::new(0x2000),
+                2 * PAGE_SIZE,
+                ASID
+            ),
             Err(ImageError::StackOutsideUserWindow)
         );
         // Stack top in kernel space.
         assert_eq!(
-            UserImage::new(VirtAddr::new(0x1_0000), VirtAddr::new(0x8030_0000), PAGE_SIZE, ASID),
+            UserImage::new(
+                VirtAddr::new(0x1_0000),
+                VirtAddr::new(0x8030_0000),
+                PAGE_SIZE,
+                ASID
+            ),
             Err(ImageError::StackOutsideUserWindow)
         );
     }
@@ -127,7 +148,12 @@ mod tests {
             Err(ImageError::BadStackGeometry)
         );
         assert_eq!(
-            UserImage::new(VirtAddr::new(0x1_0000), VirtAddr::new(0x20_0100), PAGE_SIZE, ASID),
+            UserImage::new(
+                VirtAddr::new(0x1_0000),
+                VirtAddr::new(0x20_0100),
+                PAGE_SIZE,
+                ASID
+            ),
             Err(ImageError::BadStackGeometry),
             "unaligned stack top rejected"
         );

@@ -72,7 +72,10 @@ mod tests {
     #[test]
     fn killed_is_terminal() {
         for to in ALL {
-            assert!(!is_legal_transition(Killed, to), "Killed -> {to:?} must be illegal");
+            assert!(
+                !is_legal_transition(Killed, to),
+                "Killed -> {to:?} must be illegal"
+            );
         }
     }
 

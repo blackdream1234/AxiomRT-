@@ -275,7 +275,10 @@ mod tests {
     use super::*;
 
     fn field<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
-        ev.fields.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
+        ev.fields
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.as_str())
     }
 
     #[test]
@@ -319,10 +322,9 @@ mod tests {
 
     #[test]
     fn other_fault_stays_fault_category() {
-        let ev = parse_line(
-            "CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive",
-        )
-        .unwrap();
+        let ev =
+            parse_line("CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive")
+                .unwrap();
         assert_eq!(ev.category, Category::Fault);
         assert_eq!(field(&ev, "kernel"), Some("alive"));
     }
@@ -336,8 +338,8 @@ mod tests {
 
     #[test]
     fn evt_monitor_line_uses_type_as_kind() {
-        let ev = parse_line("EVT type=CAP_DENIED ts=129 task=3 sev=error phase=syscall cap=0")
-            .unwrap();
+        let ev =
+            parse_line("EVT type=CAP_DENIED ts=129 task=3 sev=error phase=syscall cap=0").unwrap();
         assert_eq!(ev.kind, "CAP_DENIED");
         assert_eq!(ev.category, Category::Capability);
         assert_eq!(field(&ev, "ts"), Some("129"));
@@ -346,7 +348,10 @@ mod tests {
 
     #[test]
     fn boot_banner_and_bare_fields() {
-        assert_eq!(parse_line("AxiomRT kernel booted").unwrap().category, Category::Boot);
+        assert_eq!(
+            parse_line("AxiomRT kernel booted").unwrap().category,
+            Category::Boot
+        );
         let ev = parse_line("arch=riscv64").unwrap();
         assert_eq!(ev.kind, "BOOT_INFO");
         assert_eq!(field(&ev, "arch"), Some("riscv64"));
@@ -362,9 +367,7 @@ mod tests {
 
     #[test]
     fn parse_log_sequences_and_counts_skips() {
-        let log = parse_log(
-            "OpenSBI v1.8\nTASK_STARTED task=a\n\nSCHED selected=a\nnoise here\n",
-        );
+        let log = parse_log("OpenSBI v1.8\nTASK_STARTED task=a\n\nSCHED selected=a\nnoise here\n");
         assert_eq!(log.events.len(), 2);
         assert_eq!(log.events[0].seq, 1);
         assert_eq!(log.events[1].seq, 2);
@@ -395,7 +398,16 @@ mod tests {
                     RECOVERY_APPLIED policy=Kill\n";
         let log = parse_log(text);
         let s = summary(&log);
-        for cat in ["task", "scheduler", "syscall", "ipc", "capability", "fault", "watchdog", "recovery"] {
+        for cat in [
+            "task",
+            "scheduler",
+            "syscall",
+            "ipc",
+            "capability",
+            "fault",
+            "watchdog",
+            "recovery",
+        ] {
             assert!(s.contains(cat), "summary missing category {cat}:\n{s}");
         }
     }

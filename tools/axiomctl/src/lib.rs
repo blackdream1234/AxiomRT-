@@ -15,9 +15,7 @@ use std::path::PathBuf;
 pub fn repo_root() -> Option<PathBuf> {
     let mut dir = env::current_dir().ok()?;
     loop {
-        if dir.join("scripts/verify_all.sh").is_file()
-            && dir.join("kernel/Cargo.toml").is_file()
-        {
+        if dir.join("scripts/verify_all.sh").is_file() && dir.join("kernel/Cargo.toml").is_file() {
             return Some(dir);
         }
         if !dir.pop() {

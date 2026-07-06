@@ -27,7 +27,9 @@ pub struct Table {
 
 impl Table {
     pub const fn zeroed() -> Self {
-        Table { entries: [0; ENTRIES] }
+        Table {
+            entries: [0; ENTRIES],
+        }
     }
 }
 
@@ -65,7 +67,11 @@ impl<'a> Arena<'a> {
     /// (must be 4 KiB aligned). Index 0 is reserved as the root and is
     /// pre-allocated.
     pub fn new(tables: &'a mut [Table], base_pa: u64) -> Self {
-        let mut arena = Arena { tables, used: 0, base_pa };
+        let mut arena = Arena {
+            tables,
+            used: 0,
+            base_pa,
+        };
         // Root table = index 0.
         arena.used = 1;
         arena
@@ -203,7 +209,8 @@ mod tests {
         let mut store = arena_storage();
         let mut a = Arena::new(&mut store, 0x8020_0000);
         let va = VirtAddr::new(0x8020_0000);
-        a.map_page(va, PhysAddr::new(0x8020_0000), perms_krw()).unwrap();
+        a.map_page(va, PhysAddr::new(0x8020_0000), perms_krw())
+            .unwrap();
         let (pa, p) = a.translate(va).expect("mapped");
         assert_eq!(pa, PhysAddr::new(0x8020_0000));
         assert!(p.read && p.write && !p.user);
@@ -220,8 +227,11 @@ mod tests {
     fn offset_within_page_preserved() {
         let mut store = arena_storage();
         let mut a = Arena::new(&mut store, 0x8020_0000);
-        a.map_page(VirtAddr::new(0x4000), PhysAddr::new(0x9000), perms_krw()).unwrap();
-        let (pa, _) = a.translate(VirtAddr::new(0x4abc)).expect("mapped page covers offset");
+        a.map_page(VirtAddr::new(0x4000), PhysAddr::new(0x9000), perms_krw())
+            .unwrap();
+        let (pa, _) = a
+            .translate(VirtAddr::new(0x4abc))
+            .expect("mapped page covers offset");
         assert_eq!(pa, PhysAddr::new(0x9abc));
     }
 
@@ -229,7 +239,8 @@ mod tests {
     fn double_map_rejected() {
         let mut store = arena_storage();
         let mut a = Arena::new(&mut store, 0x8020_0000);
-        a.map_page(VirtAddr::new(0x2000), PhysAddr::new(0x2000), perms_krw()).unwrap();
+        a.map_page(VirtAddr::new(0x2000), PhysAddr::new(0x2000), perms_krw())
+            .unwrap();
         assert_eq!(
             a.map_page(VirtAddr::new(0x2000), PhysAddr::new(0x3000), perms_krw()),
             Err(MapError::AlreadyMapped)
@@ -241,8 +252,18 @@ mod tests {
         // UART (VPN2=0) and kernel (VPN2=2) exercise two subtrees.
         let mut store = arena_storage();
         let mut a = Arena::new(&mut store, 0x8020_0000);
-        a.map_page(VirtAddr::new(0x1000_0000), PhysAddr::new(0x1000_0000), Permissions::kernel_device()).unwrap();
-        a.map_page(VirtAddr::new(0x8020_0000), PhysAddr::new(0x8020_0000), perms_krw()).unwrap();
+        a.map_page(
+            VirtAddr::new(0x1000_0000),
+            PhysAddr::new(0x1000_0000),
+            Permissions::kernel_device(),
+        )
+        .unwrap();
+        a.map_page(
+            VirtAddr::new(0x8020_0000),
+            PhysAddr::new(0x8020_0000),
+            perms_krw(),
+        )
+        .unwrap();
         assert!(a.translate(VirtAddr::new(0x1000_0000)).is_some());
         assert!(a.translate(VirtAddr::new(0x8020_0000)).is_some());
         // root + 2 levels for each of the 2 regions = 1 + 4 = 5 tables.
@@ -253,7 +274,8 @@ mod tests {
     fn identity_range_maps_every_page() {
         let mut store = arena_storage();
         let mut a = Arena::new(&mut store, 0x8020_0000);
-        a.identity_map_range(0x8020_0000, 0x8020_0000 + 4 * PAGE_SIZE, perms_krw()).unwrap();
+        a.identity_map_range(0x8020_0000, 0x8020_0000 + 4 * PAGE_SIZE, perms_krw())
+            .unwrap();
         for i in 0..4 {
             let va = VirtAddr::new(0x8020_0000 + i * PAGE_SIZE);
             assert_eq!(a.translate(va).unwrap().0, PhysAddr::new(va.as_u64()));
@@ -265,7 +287,11 @@ mod tests {
         let mut store = [Table::zeroed(); 2]; // root + 1: too few for a full path
         let mut a = Arena::new(&mut store, 0x8020_0000);
         assert_eq!(
-            a.map_page(VirtAddr::new(0x8020_0000), PhysAddr::new(0x8020_0000), perms_krw()),
+            a.map_page(
+                VirtAddr::new(0x8020_0000),
+                PhysAddr::new(0x8020_0000),
+                perms_krw()
+            ),
             Err(MapError::OutOfTables)
         );
     }

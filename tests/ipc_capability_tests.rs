@@ -7,7 +7,7 @@
 //! capability succeeds. Every failure leaves the endpoint untouched.
 
 use kernel::caps::table::CapError;
-use kernel::caps::{Capability, CapTable, ObjectRef, ObjectType, Rights};
+use kernel::caps::{CapTable, Capability, ObjectRef, ObjectType, Rights};
 use kernel::ipc::{
     recv_checked, send_checked, Endpoint, EndpointId, EndpointState, IpcCapError, Message,
     RecvOutcome, SendOutcome,
@@ -24,7 +24,13 @@ fn table_with(index: usize, object_id: u32, rights: Rights) -> CapTable {
     let mut t = CapTable::new();
     t.insert(
         index,
-        Capability::new(ObjectRef { object_type: ObjectType::Endpoint, object_id }, rights),
+        Capability::new(
+            ObjectRef {
+                object_type: ObjectType::Endpoint,
+                object_id,
+            },
+            rights,
+        ),
     )
     .unwrap();
     t
@@ -40,7 +46,11 @@ fn ipc_without_capability_fails() {
     let mut ep = endpoint();
     let r = send_checked(&empty, 0, &mut ep, ThreadId(1), msg(1));
     assert_eq!(r, Err(IpcCapError::Cap(CapError::EmptySlot)));
-    assert_eq!(ep.state(), EndpointState::Idle, "endpoint never touched on failure");
+    assert_eq!(
+        ep.state(),
+        EndpointState::Idle,
+        "endpoint never touched on failure"
+    );
 
     let r = recv_checked(&empty, 0, &mut ep, ThreadId(2));
     assert_eq!(r, Err(IpcCapError::Cap(CapError::EmptySlot)));
@@ -109,7 +119,10 @@ fn wrong_object_type_rejected() {
     t.insert(
         0,
         Capability::new(
-            ObjectRef { object_type: ObjectType::Thread, object_id: EP_ID },
+            ObjectRef {
+                object_type: ObjectType::Thread,
+                object_id: EP_ID,
+            },
             Rights::SEND,
         ),
     )

@@ -38,7 +38,11 @@ pub struct Thread {
 impl Thread {
     /// Threads are born Ready (creation is boot-time in v0.1).
     pub const fn new(id: ThreadId, address_space: AddressSpaceId) -> Self {
-        Thread { id, state: ThreadState::Ready, address_space }
+        Thread {
+            id,
+            state: ThreadState::Ready,
+            address_space,
+        }
     }
 
     pub const fn id(&self) -> ThreadId {
@@ -59,7 +63,10 @@ impl Thread {
             self.state = to;
             Ok(())
         } else {
-            Err(IllegalTransition { from: self.state, to })
+            Err(IllegalTransition {
+                from: self.state,
+                to,
+            })
         }
     }
 }
@@ -92,7 +99,13 @@ mod tests {
         let mut t = thread();
         t.transition(ThreadState::Killed).unwrap();
         let err = t.transition(ThreadState::Ready).unwrap_err();
-        assert_eq!(err, IllegalTransition { from: ThreadState::Killed, to: ThreadState::Ready });
+        assert_eq!(
+            err,
+            IllegalTransition {
+                from: ThreadState::Killed,
+                to: ThreadState::Ready
+            }
+        );
         assert_eq!(t.state(), ThreadState::Killed, "unchanged on error");
     }
 

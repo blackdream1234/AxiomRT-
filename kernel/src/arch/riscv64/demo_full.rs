@@ -38,8 +38,14 @@ extern "C" fn supervisor_body() -> ! {
     unsafe {
         core::arch::asm!(
             "1:",
-            "li a0, 0", "li a1, 0x200040", "li a2, 64", "li a7, 4", "ecall",
-            "li a1, 2", "li a7, 7", "ecall", // fault_ack decision=Kill
+            "li a0, 0",
+            "li a1, 0x200040",
+            "li a2, 64",
+            "li a7, 4",
+            "ecall",
+            "li a1, 2",
+            "li a7, 7",
+            "ecall", // fault_ack decision=Kill
             "j 1b",
             options(noreturn)
         )
@@ -52,7 +58,11 @@ extern "C" fn logger_body() -> ! {
     unsafe {
         core::arch::asm!(
             "1:",
-            "li a0, 0", "li a1, 0x200040", "li a2, 64", "li a7, 4", "ecall",
+            "li a0, 0",
+            "li a1, 0x200040",
+            "li a2, 64",
+            "li a7, 4",
+            "ecall",
             "j 1b",
             options(noreturn)
         )
@@ -66,8 +76,13 @@ extern "C" fn faulty_body() -> ! {
     // infinite loop; never returns.
     unsafe {
         core::arch::asm!(
-            "li a0, 0", "li a1, 0x200040", "li a2, 4", "li a7, 3", "ecall", // illegal IPC
-            "1:", "j 1b", // CPU exhaustion
+            "li a0, 0",
+            "li a1, 0x200040",
+            "li a2, 4",
+            "li a7, 3",
+            "ecall", // illegal IPC
+            "1:",
+            "j 1b", // CPU exhaustion
             options(noreturn)
         )
     }
@@ -78,7 +93,10 @@ extern "C" fn critical_body() -> ! {
     // SAFETY: syscall control flow only; never returns.
     unsafe {
         core::arch::asm!(
-            "1:", "li a7, 1", "ecall", "j 1b", // sys_yield loop
+            "1:",
+            "li a7, 1",
+            "ecall",
+            "j 1b", // sys_yield loop
             options(noreturn)
         )
     }

@@ -39,7 +39,11 @@ impl ArchContext {
     /// A zeroed context: `resume` target and stack must be set before
     /// first use; a zero ra/sp context must never be switched to.
     pub const fn zeroed() -> Self {
-        ArchContext { ra: 0, sp: 0, s: [0; 12] }
+        ArchContext {
+            ra: 0,
+            sp: 0,
+            s: [0; 12],
+        }
     }
 }
 

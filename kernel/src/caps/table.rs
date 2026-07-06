@@ -39,7 +39,9 @@ pub struct CapTable {
 
 impl CapTable {
     pub const fn new() -> Self {
-        CapTable { slots: [None; CAP_TABLE_SLOTS] }
+        CapTable {
+            slots: [None; CAP_TABLE_SLOTS],
+        }
     }
 
     /// Install a capability (kernel-internal; boot-time in v0.1).

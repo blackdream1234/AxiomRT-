@@ -43,7 +43,7 @@ impl TrapFrame {
         self.regs[9] = value as u64;
     }
     /// True if the trap was taken from user mode (AXIOM-USER-002).
-    pub fn from_user(&self) -> bool {
+    pub fn is_from_user(&self) -> bool {
         self.sstatus & SSTATUS_SPP == 0
     }
 
@@ -55,7 +55,11 @@ impl TrapFrame {
     pub fn new_user(entry: u64, user_sp: u64) -> Self {
         // sstatus.SPIE (bit 5) set, SPP (bit 8) clear.
         const SSTATUS_SPIE: u64 = 1 << 5;
-        let mut f = TrapFrame { regs: [0; 31], sepc: entry, sstatus: SSTATUS_SPIE };
+        let mut f = TrapFrame {
+            regs: [0; 31],
+            sepc: entry,
+            sstatus: SSTATUS_SPIE,
+        };
         f.regs[1] = user_sp; // x2 = sp
         f
     }
@@ -154,7 +158,11 @@ fn put_hex(value: u64) {
     uart::put_str("0x");
     for shift in (0..16).rev() {
         let digit = ((value >> (shift * 4)) & 0xf) as u8;
-        uart::put_byte(if digit < 10 { b'0' + digit } else { b'a' + digit - 10 });
+        uart::put_byte(if digit < 10 {
+            b'0' + digit
+        } else {
+            b'a' + digit - 10
+        });
     }
 }
 
@@ -206,7 +214,7 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
         // remains a safe halt (kernel invariant violation).
         CAUSE_ILLEGAL_INSTRUCTION => {
             report("illegal-instruction", scause, frame);
-            if frame.from_user() && contain_user_fault(frame, "illegal_instruction") {
+            if frame.is_from_user() && contain_user_fault(frame, "illegal_instruction") {
                 return;
             }
             uart::put_str("HALT reason=illegal_instruction phase=trap\n");
@@ -250,7 +258,7 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
         // A page fault taken in kernel mode is a KernelInvariantViolation.
         CAUSE_INSTRUCTION_PAGE_FAULT | CAUSE_LOAD_PAGE_FAULT | CAUSE_STORE_PAGE_FAULT => {
             report("page-fault", scause, frame);
-            if frame.from_user() {
+            if frame.is_from_user() {
                 let reason = page_fault_reason(scause, read_stval());
                 if contain_user_fault(frame, reason) {
                     return;
@@ -265,7 +273,7 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
         // From kernel mode: controlled panic (AXIOM-TRAP-001).
         _ => {
             report("unknown", scause, frame);
-            if frame.from_user() && contain_user_fault(frame, "exception") {
+            if frame.is_from_user() && contain_user_fault(frame, "exception") {
                 return;
             }
             uart::put_str("PANIC kernel=axiomrt reason=unknown_trap phase=trap\n");

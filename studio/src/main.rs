@@ -205,12 +205,7 @@ fn page_route(path: &str) -> bool {
     )
 }
 
-fn respond(
-    stream: &mut TcpStream,
-    code: u16,
-    ctype: &str,
-    body: &str,
-) -> std::io::Result<()> {
+fn respond(stream: &mut TcpStream, code: u16, ctype: &str, body: &str) -> std::io::Result<()> {
     let reason = match code {
         200 => "OK",
         400 => "Bad Request",
@@ -249,8 +244,13 @@ fn tail(s: &str, max: usize) -> String {
         return s.to_string();
     }
     let cut = s.len() - max;
-    let start = (cut..s.len()).find(|&i| s.is_char_boundary(i)).unwrap_or(cut);
-    format!("[... truncated, showing last {max} bytes ...]\n{}", &s[start..])
+    let start = (cut..s.len())
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(cut);
+    format!(
+        "[... truncated, showing last {max} bytes ...]\n{}",
+        &s[start..]
+    )
 }
 
 // ---------------------------------------------------------------------
@@ -267,7 +267,12 @@ fn api_start(
     {
         let mut st = state.lock().unwrap();
         if st.busy.is_some() {
-            return respond(stream, 409, "application/json", "{\"started\":false,\"reason\":\"busy\"}");
+            return respond(
+                stream,
+                409,
+                "application/json",
+                "{\"started\":false,\"reason\":\"busy\"}",
+            );
         }
         st.busy = Some(which);
         let job = job_mut(&mut st, which);
@@ -495,7 +500,12 @@ fn api_verify_log(stream: &mut TcpStream, state: &Shared, root: &Path) -> std::i
     } else {
         live
     };
-    respond(stream, 200, "text/plain; charset=utf-8", &tail(&text, 200_000))
+    respond(
+        stream,
+        200,
+        "text/plain; charset=utf-8",
+        &tail(&text, 200_000),
+    )
 }
 
 fn api_evidence(stream: &mut TcpStream, root: &Path) -> std::io::Result<()> {
@@ -506,7 +516,9 @@ fn api_evidence(stream: &mut TcpStream, root: &Path) -> std::io::Result<()> {
             if !e.path().is_dir() {
                 continue;
             }
-            let Ok(name) = e.file_name().into_string() else { continue };
+            let Ok(name) = e.file_name().into_string() else {
+                continue;
+            };
             let mut files: Vec<String> = std::fs::read_dir(e.path())
                 .map(|d| {
                     d.filter_map(|f| f.ok())
@@ -559,7 +571,12 @@ fn api_doc(stream: &mut TcpStream, root: &Path, query: &str) -> std::io::Result<
 
 fn serve_file(stream: &mut TcpStream, path: &Path) -> std::io::Result<()> {
     match std::fs::read_to_string(path) {
-        Ok(text) => respond(stream, 200, "text/plain; charset=utf-8", &tail(&text, 400_000)),
+        Ok(text) => respond(
+            stream,
+            200,
+            "text/plain; charset=utf-8",
+            &tail(&text, 400_000),
+        ),
         Err(_) => respond(stream, 404, "text/plain", "no such file"),
     }
 }
@@ -578,11 +595,7 @@ fn api_release_check(stream: &mut TcpStream, root: &Path) -> std::io::Result<()>
         ),
         Err(e) => (false, format!("failed to run release check: {e}")),
     };
-    let body = format!(
-        "{{\"ok\":{},\"text\":\"{}\"}}",
-        ok,
-        json_escape(&text)
-    );
+    let body = format!("{{\"ok\":{},\"text\":\"{}\"}}", ok, json_escape(&text));
     respond(stream, 200, "application/json", &body)
 }
 
@@ -610,9 +623,18 @@ mod tests {
     #[test]
     fn all_documented_pages_route() {
         for p in [
-            "/", "/run", "/tasks", "/scheduler", "/faults", "/ipc",
-            "/capabilities", "/tests", "/proofs", "/evidence",
-            "/limitations", "/release",
+            "/",
+            "/run",
+            "/tasks",
+            "/scheduler",
+            "/faults",
+            "/ipc",
+            "/capabilities",
+            "/tests",
+            "/proofs",
+            "/evidence",
+            "/limitations",
+            "/release",
         ] {
             assert!(page_route(p), "page {p} must serve the shell");
         }
@@ -652,7 +674,10 @@ mod tests {
 
     #[test]
     fn query_params_and_tail() {
-        assert_eq!(query_param("ver=v0.9&file=log.txt", "file"), Some("log.txt"));
+        assert_eq!(
+            query_param("ver=v0.9&file=log.txt", "file"),
+            Some("log.txt")
+        );
         assert_eq!(query_param("", "x"), None);
         assert_eq!(tail("abc", 10), "abc");
         assert!(tail(&"x".repeat(100), 10).contains("truncated"));

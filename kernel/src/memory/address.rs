@@ -27,6 +27,10 @@ pub const USER_RANGE_START: u64 = 0x0000_1000;
 /// End of the user virtual window (exclusive).
 pub const USER_RANGE_END: u64 = 0x4000_0000;
 
+// Structural guarantee, checked at compile time: the user window can
+// never overlap the kernel-reserved region (docs/05_MEMORY_MODEL.md).
+const _: () = assert!(USER_RANGE_END <= KERNEL_RANGE_START);
+
 /// A virtual address (interpretation depends on an AddressSpace).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VirtAddr(u64);
@@ -43,7 +47,7 @@ impl VirtAddr {
         self.0
     }
     pub const fn is_page_aligned(self) -> bool {
-        self.0 % PAGE_SIZE == 0
+        self.0.is_multiple_of(PAGE_SIZE)
     }
     /// Round down to the containing page boundary.
     pub const fn page_base(self) -> Self {
@@ -64,7 +68,7 @@ impl PhysAddr {
         self.0
     }
     pub const fn is_page_aligned(self) -> bool {
-        self.0 % PAGE_SIZE == 0
+        self.0.is_multiple_of(PAGE_SIZE)
     }
     /// Round down to the containing frame boundary.
     pub const fn frame_base(self) -> Self {
@@ -98,16 +102,23 @@ mod tests {
         assert!(VirtAddr::new(0x3000).is_page_aligned());
         assert!(!VirtAddr::new(0x3001).is_page_aligned());
         assert_eq!(VirtAddr::new(0x3fff).page_base(), VirtAddr::new(0x3000));
-        assert_eq!(PhysAddr::new(0x8020_0123).frame_base(), PhysAddr::new(0x8020_0000));
+        assert_eq!(
+            PhysAddr::new(0x8020_0123).frame_base(),
+            PhysAddr::new(0x8020_0000)
+        );
     }
 
     #[test]
     fn kernel_and_user_ranges_are_disjoint() {
-        assert!(USER_RANGE_END <= KERNEL_RANGE_START);
+        // Window disjointness itself is a compile-time const assertion
+        // at the constant definitions.
         assert!(PhysAddr::new(KERNEL_RANGE_START).is_kernel());
         assert!(!PhysAddr::new(KERNEL_RANGE_END).is_kernel());
         assert!(VirtAddr::new(USER_RANGE_START).is_user());
-        assert!(!VirtAddr::new(0x0).is_user(), "page zero is never user memory");
+        assert!(
+            !VirtAddr::new(0x0).is_user(),
+            "page zero is never user memory"
+        );
         assert!(!VirtAddr::new(USER_RANGE_END).is_user());
         assert!(!VirtAddr::new(KERNEL_RANGE_START).is_user());
     }

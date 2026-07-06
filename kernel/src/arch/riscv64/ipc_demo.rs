@@ -31,7 +31,7 @@ extern "C" fn receiver_body() -> ! {
             "li a2, 64",       // capacity
             "li a7, 4",        // sys_recv
             "ecall",
-            "li a7, 2",        // sys_exit
+            "li a7, 2", // sys_exit
             "ecall",
             "1:",
             "j 1b",
@@ -48,16 +48,20 @@ extern "C" fn sender_body() -> ! {
     unsafe {
         core::arch::asm!(
             "li t0, 0x200040",
-            "li t1, 0x50", "sb t1, 0(t0)", // 'P'
-            "li t1, 0x49", "sb t1, 1(t0)", // 'I'
-            "li t1, 0x4e", "sb t1, 2(t0)", // 'N'
-            "li t1, 0x47", "sb t1, 3(t0)", // 'G'
+            "li t1, 0x50",
+            "sb t1, 0(t0)", // 'P'
+            "li t1, 0x49",
+            "sb t1, 1(t0)", // 'I'
+            "li t1, 0x4e",
+            "sb t1, 2(t0)", // 'N'
+            "li t1, 0x47",
+            "sb t1, 3(t0)",    // 'G'
             "li a0, 0",        // capability index (Send cap)
             "li a1, 0x200040", // buffer VA
             "li a2, 4",        // length
             "li a7, 3",        // sys_send
             "ecall",
-            "li a7, 2",        // sys_exit
+            "li a7, 2", // sys_exit
             "ecall",
             "1:",
             "j 1b",

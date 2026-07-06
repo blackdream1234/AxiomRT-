@@ -42,7 +42,11 @@ pub struct Endpoint {
 
 impl Endpoint {
     pub const fn new(id: EndpointId) -> Self {
-        Endpoint { id, state: EndpointState::Idle, pending: None }
+        Endpoint {
+            id,
+            state: EndpointState::Idle,
+            pending: None,
+        }
     }
 
     pub const fn id(&self) -> EndpointId {

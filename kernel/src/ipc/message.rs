@@ -47,7 +47,13 @@ impl Message {
         }
         let mut payload = [0u8; MSG_MAX_BYTES];
         payload[..data.len()].copy_from_slice(data);
-        Ok(Message { header: MessageHeader { sender, len: data.len() }, payload })
+        Ok(Message {
+            header: MessageHeader {
+                sender,
+                len: data.len(),
+            },
+            payload,
+        })
     }
 
     pub const fn header(&self) -> MessageHeader {
@@ -90,6 +96,10 @@ mod tests {
         let m = Message::new(ThreadId(3), &src).unwrap();
         src[0] = 0; // mutating the source after send must not matter
         assert_eq!(src[0], 0, "source buffer was really mutated");
-        assert_eq!(m.data(), &[9, 9, 9, 9], "no shared memory: payload was copied");
+        assert_eq!(
+            m.data(),
+            &[9, 9, 9, 9],
+            "no shared memory: payload was copied"
+        );
     }
 }

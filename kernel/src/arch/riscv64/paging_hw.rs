@@ -56,7 +56,10 @@ struct KernelRegions {
 fn kernel_regions() -> KernelRegions {
     KernelRegions {
         text: (sym(unsafe { &__text_start }), sym(unsafe { &__text_end })),
-        rodata: (sym(unsafe { &__rodata_start }), sym(unsafe { &__rodata_end })),
+        rodata: (
+            sym(unsafe { &__rodata_start }),
+            sym(unsafe { &__rodata_end }),
+        ),
         data: (sym(unsafe { &__data_start }), sym(unsafe { &__data_end })),
     }
 }
@@ -66,17 +69,37 @@ fn kernel_regions() -> KernelRegions {
 /// table so the S-mode trap handler is reachable after a U→S trap
 /// (docs/12_MMU_SV39.md §5).
 fn map_kernel_regions(arena: &mut Arena<'_>, r: &KernelRegions) {
-    let krx = Permissions { read: true, write: false, execute: true, user: false, device: false };
-    let kr_only = Permissions { read: true, write: false, execute: false, user: false, device: false };
+    let krx = Permissions {
+        read: true,
+        write: false,
+        execute: true,
+        user: false,
+        device: false,
+    };
+    let kr_only = Permissions {
+        read: true,
+        write: false,
+        execute: false,
+        user: false,
+        device: false,
+    };
     let krw = Permissions::kernel_rw();
     let kdev = Permissions::kernel_device();
 
-    arena.identity_map_range(r.text.0, r.text.1, krx).expect("map kernel text");
+    arena
+        .identity_map_range(r.text.0, r.text.1, krx)
+        .expect("map kernel text");
     if r.rodata.1 > r.rodata.0 {
-        arena.identity_map_range(r.rodata.0, r.rodata.1, kr_only).expect("map kernel rodata");
+        arena
+            .identity_map_range(r.rodata.0, r.rodata.1, kr_only)
+            .expect("map kernel rodata");
     }
-    arena.identity_map_range(r.data.0, r.data.1, krw).expect("map kernel data");
-    arena.identity_map_range(UART_PAGE, UART_PAGE + 0x1000, kdev).expect("map uart");
+    arena
+        .identity_map_range(r.data.0, r.data.1, krw)
+        .expect("map kernel data");
+    arena
+        .identity_map_range(UART_PAGE, UART_PAGE + 0x1000, kdev)
+        .expect("map uart");
 }
 
 /// Build the kernel page table and enable Sv39. Returns after the MMU
@@ -152,7 +175,13 @@ pub fn build_user_address_space(
 
     // User code: map two pages of the physical code frame at USER_CODE_VA
     // with U + R + X. Two pages cover a function that straddles a page.
-    let urx = Permissions { read: true, write: false, execute: true, user: true, device: false };
+    let urx = Permissions {
+        read: true,
+        write: false,
+        execute: true,
+        user: true,
+        device: false,
+    };
     let code_base = code_phys & !0xfff;
     for i in 0..2 {
         arena

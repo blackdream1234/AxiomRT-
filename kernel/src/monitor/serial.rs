@@ -81,11 +81,19 @@ const fn policy_name(d: RecoveryDecision) -> &'static str {
 /// (docs/11_RUNTIME_MONITORING.md §4). Never panics; on overflow the
 /// line ends with the explicit `!truncated` marker.
 pub fn render(event: &MonitorEvent) -> EventLine {
-    let mut line = EventLine { buf: [0; LINE_CAPACITY], len: 0, truncated: false };
+    let mut line = EventLine {
+        buf: [0; LINE_CAPACITY],
+        len: 0,
+        truncated: false,
+    };
     // Reserve tail space for the truncation marker.
     const MARKER: &str = " !truncated";
     let writable = LINE_CAPACITY - MARKER.len();
-    let mut w = BufWriter { buf: &mut line.buf[..writable], len: 0, overflow: false };
+    let mut w = BufWriter {
+        buf: &mut line.buf[..writable],
+        len: 0,
+        overflow: false,
+    };
 
     let mut result = write!(
         w,
@@ -137,16 +145,28 @@ mod tests {
 
     #[test]
     fn renders_mandatory_fields_in_stable_format() {
-        let e = MonitorEvent::new(128, ThreadId(3), MonitorEventType::TaskFaulted, KernelPhase::Trap);
+        let e = MonitorEvent::new(
+            128,
+            ThreadId(3),
+            MonitorEventType::TaskFaulted,
+            KernelPhase::Trap,
+        );
         let line = render(&e);
-        assert_eq!(line.as_str(), "EVT type=TASK_FAULTED ts=128 task=3 sev=error phase=trap");
+        assert_eq!(
+            line.as_str(),
+            "EVT type=TASK_FAULTED ts=128 task=3 sev=error phase=trap"
+        );
         assert!(!line.truncated());
     }
 
     #[test]
     fn optional_fields_appear_only_when_present() {
-        let mut e =
-            MonitorEvent::new(129, ThreadId(3), MonitorEventType::CapDenied, KernelPhase::Syscall);
+        let mut e = MonitorEvent::new(
+            129,
+            ThreadId(3),
+            MonitorEventType::CapDenied,
+            KernelPhase::Syscall,
+        );
         e.related_cap = Some(0);
         e.related_syscall = Some(3);
         assert_eq!(
@@ -169,10 +189,18 @@ mod tests {
 
     #[test]
     fn export_appends_newline_through_sink() {
-        let e = MonitorEvent::new(1, ThreadId(0), MonitorEventType::TaskStarted, KernelPhase::Boot);
+        let e = MonitorEvent::new(
+            1,
+            ThreadId(0),
+            MonitorEventType::TaskStarted,
+            KernelPhase::Boot,
+        );
         let mut out = String::new();
         export(&e, |s| out.push_str(s));
-        assert_eq!(out, "EVT type=TASK_STARTED ts=1 task=0 sev=info phase=boot\n");
+        assert_eq!(
+            out,
+            "EVT type=TASK_STARTED ts=1 task=0 sev=info phase=boot\n"
+        );
     }
 
     #[test]
@@ -187,7 +215,11 @@ mod tests {
         e.related_cap = Some(u32::MAX);
         e.related_syscall = Some(u64::MAX);
         let line = render(&e);
-        assert!(!line.truncated(), "capacity must cover the worst case: {}", line.as_str());
+        assert!(
+            !line.truncated(),
+            "capacity must cover the worst case: {}",
+            line.as_str()
+        );
         assert!(line.as_str().len() <= LINE_CAPACITY);
     }
 }

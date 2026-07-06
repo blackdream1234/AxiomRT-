@@ -149,14 +149,27 @@ mod tests {
     fn severity_is_derived() {
         assert_eq!(MonitorEventType::TaskStarted.severity(), Severity::Info);
         assert_eq!(MonitorEventType::CapDenied.severity(), Severity::Error);
-        assert_eq!(MonitorEventType::WatchdogTimeout.severity(), Severity::Critical);
-        let e = MonitorEvent::new(1, ThreadId(2), MonitorEventType::PageFault, KernelPhase::Trap);
+        assert_eq!(
+            MonitorEventType::WatchdogTimeout.severity(),
+            Severity::Critical
+        );
+        let e = MonitorEvent::new(
+            1,
+            ThreadId(2),
+            MonitorEventType::PageFault,
+            KernelPhase::Trap,
+        );
         assert_eq!(e.severity, Severity::Error);
     }
 
     #[test]
     fn optional_fields_default_absent() {
-        let e = MonitorEvent::new(1, ThreadId(2), MonitorEventType::TaskExited, KernelPhase::Syscall);
+        let e = MonitorEvent::new(
+            1,
+            ThreadId(2),
+            MonitorEventType::TaskExited,
+            KernelPhase::Syscall,
+        );
         assert!(e.policy_result.is_none());
         assert!(e.related_cap.is_none());
         assert!(e.related_syscall.is_none());

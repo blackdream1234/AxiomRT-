@@ -35,19 +35,49 @@ pub struct Permissions {
 
 impl Permissions {
     pub const fn user_rx() -> Self {
-        Permissions { read: true, write: false, execute: true, user: true, device: false }
+        Permissions {
+            read: true,
+            write: false,
+            execute: true,
+            user: true,
+            device: false,
+        }
     }
     pub const fn user_rw() -> Self {
-        Permissions { read: true, write: true, execute: false, user: true, device: false }
+        Permissions {
+            read: true,
+            write: true,
+            execute: false,
+            user: true,
+            device: false,
+        }
     }
     pub const fn user_r() -> Self {
-        Permissions { read: true, write: false, execute: false, user: true, device: false }
+        Permissions {
+            read: true,
+            write: false,
+            execute: false,
+            user: true,
+            device: false,
+        }
     }
     pub const fn kernel_rw() -> Self {
-        Permissions { read: true, write: true, execute: false, user: false, device: false }
+        Permissions {
+            read: true,
+            write: true,
+            execute: false,
+            user: false,
+            device: false,
+        }
     }
     pub const fn kernel_device() -> Self {
-        Permissions { read: true, write: true, execute: false, user: false, device: true }
+        Permissions {
+            read: true,
+            write: true,
+            execute: false,
+            user: false,
+            device: true,
+        }
     }
 }
 
@@ -96,7 +126,10 @@ pub struct PageTable {
 
 impl PageTable {
     pub const fn new(owner: AddressSpaceId) -> Self {
-        PageTable { owner, entries: [None; MAX_MAPPINGS] }
+        PageTable {
+            owner,
+            entries: [None; MAX_MAPPINGS],
+        }
     }
 
     pub const fn owner(&self) -> AddressSpaceId {
@@ -196,7 +229,11 @@ impl PageTable {
             return Err(MapError::TableFull);
         };
         // All checks passed: apply fully (atomic success path).
-        *slot = Some(Mapping { vpage, frame: frame.base(), perms });
+        *slot = Some(Mapping {
+            vpage,
+            frame: frame.base(),
+            perms,
+        });
         frame
             .mark_mapped()
             .expect("state checked Allocated above; kernel invariant");
@@ -204,11 +241,7 @@ impl PageTable {
     }
 
     /// Remove a mapping and return the frame to Allocated.
-    pub fn unmap(
-        &mut self,
-        vpage: VirtAddr,
-        frame: &mut PhysicalFrame,
-    ) -> Result<(), MapError> {
+    pub fn unmap(&mut self, vpage: VirtAddr, frame: &mut PhysicalFrame) -> Result<(), MapError> {
         let slot = self
             .entries
             .iter_mut()
@@ -220,7 +253,9 @@ impl PageTable {
         if mapping.frame != frame.base() {
             return Err(MapError::NotMapped);
         }
-        frame.mark_unmapped().map_err(|_| MapError::FrameNotMappable)?;
+        frame
+            .mark_unmapped()
+            .map_err(|_| MapError::FrameNotMappable)?;
         *slot = None;
         Ok(())
     }
@@ -249,9 +284,12 @@ mod tests {
     fn map_and_lookup_user_page() {
         let mut pt = PageTable::new(ASID);
         let mut f = user_frame(ASID);
-        pt.map(VirtAddr::new(0x2000), &mut f, Permissions::user_rw()).unwrap();
+        pt.map(VirtAddr::new(0x2000), &mut f, Permissions::user_rw())
+            .unwrap();
         assert_eq!(f.state(), FrameState::Mapped);
-        let m = pt.lookup(VirtAddr::new(0x2abc)).expect("page covers 0x2abc");
+        let m = pt
+            .lookup(VirtAddr::new(0x2abc))
+            .expect("page covers 0x2abc");
         assert_eq!(m.frame, PhysAddr::new(0x1000_0000));
     }
 
@@ -265,7 +303,11 @@ mod tests {
             pt.map(VirtAddr::new(0x2000), &mut f, Permissions::user_r()),
             Err(MapError::KernelFrameUserMapped)
         );
-        assert_eq!(f.state(), FrameState::Allocated, "atomic: no state change on error");
+        assert_eq!(
+            f.state(),
+            FrameState::Allocated,
+            "atomic: no state change on error"
+        );
     }
 
     #[test]
@@ -283,15 +325,27 @@ mod tests {
     fn wx_user_mapping_rejected() {
         let mut pt = PageTable::new(ASID);
         let mut f = user_frame(ASID);
-        let wx = Permissions { read: true, write: true, execute: true, user: true, device: false };
-        assert_eq!(pt.map(VirtAddr::new(0x2000), &mut f, wx), Err(MapError::WxViolation));
+        let wx = Permissions {
+            read: true,
+            write: true,
+            execute: true,
+            user: true,
+            device: false,
+        };
+        assert_eq!(
+            pt.map(VirtAddr::new(0x2000), &mut f, wx),
+            Err(MapError::WxViolation)
+        );
     }
 
     #[test]
     fn device_mapping_is_kernel_only() {
         let mut pt = PageTable::new(ASID);
         let mut f = user_frame(ASID);
-        let user_dev = Permissions { device: true, ..Permissions::user_rw() };
+        let user_dev = Permissions {
+            device: true,
+            ..Permissions::user_rw()
+        };
         assert_eq!(
             pt.map(VirtAddr::new(0x2000), &mut f, user_dev),
             Err(MapError::DeviceRuleViolation)
@@ -319,7 +373,8 @@ mod tests {
         let mut f1 = user_frame(ASID);
         let mut f2 = PhysicalFrame::new_free(PhysAddr::new(0x1000_1000));
         f2.allocate(FrameOwner::AddressSpace(ASID)).unwrap();
-        pt.map(VirtAddr::new(0x2000), &mut f1, Permissions::user_rw()).unwrap();
+        pt.map(VirtAddr::new(0x2000), &mut f1, Permissions::user_rw())
+            .unwrap();
         assert_eq!(
             pt.map(VirtAddr::new(0x2000), &mut f2, Permissions::user_rw()),
             Err(MapError::AlreadyMapped)
@@ -331,7 +386,8 @@ mod tests {
         let mut pt_a = PageTable::new(ASID);
         let mut pt_b = PageTable::new(ASID);
         let mut f = user_frame(ASID);
-        pt_a.map(VirtAddr::new(0x2000), &mut f, Permissions::user_rw()).unwrap();
+        pt_a.map(VirtAddr::new(0x2000), &mut f, Permissions::user_rw())
+            .unwrap();
         assert_eq!(
             pt_b.map(VirtAddr::new(0x3000), &mut f, Permissions::user_rw()),
             Err(MapError::FrameNotMappable),
@@ -353,11 +409,15 @@ mod tests {
     fn unmap_returns_frame_to_allocated() {
         let mut pt = PageTable::new(ASID);
         let mut f = user_frame(ASID);
-        pt.map(VirtAddr::new(0x2000), &mut f, Permissions::user_rw()).unwrap();
+        pt.map(VirtAddr::new(0x2000), &mut f, Permissions::user_rw())
+            .unwrap();
         pt.unmap(VirtAddr::new(0x2000), &mut f).unwrap();
         assert_eq!(f.state(), FrameState::Allocated);
         assert!(pt.is_empty());
-        assert_eq!(pt.unmap(VirtAddr::new(0x2000), &mut f), Err(MapError::NotMapped));
+        assert_eq!(
+            pt.unmap(VirtAddr::new(0x2000), &mut f),
+            Err(MapError::NotMapped)
+        );
     }
 
     #[test]

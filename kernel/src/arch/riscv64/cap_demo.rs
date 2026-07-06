@@ -29,9 +29,15 @@ extern "C" fn receiver_body() -> ! {
     // SAFETY: syscall control flow; never returns.
     unsafe {
         core::arch::asm!(
-            "li a0, 0", "li a1, 0x200040", "li a2, 64", "li a7, 4", "ecall", // recv
-            "li a7, 2", "ecall", // exit
-            "1:", "j 1b",
+            "li a0, 0",
+            "li a1, 0x200040",
+            "li a2, 64",
+            "li a7, 4",
+            "ecall", // recv
+            "li a7, 2",
+            "ecall", // exit
+            "1:",
+            "j 1b",
             options(noreturn)
         )
     }
@@ -43,9 +49,15 @@ extern "C" fn faulty_body() -> ! {
     // SAFETY: the send is denied (no capability); never returns.
     unsafe {
         core::arch::asm!(
-            "li a0, 0", "li a1, 0x200040", "li a2, 4", "li a7, 3", "ecall", // send (denied)
-            "li a7, 2", "ecall", // exit
-            "1:", "j 1b",
+            "li a0, 0",
+            "li a1, 0x200040",
+            "li a2, 4",
+            "li a7, 3",
+            "ecall", // send (denied)
+            "li a7, 2",
+            "ecall", // exit
+            "1:",
+            "j 1b",
             options(noreturn)
         )
     }
@@ -57,13 +69,23 @@ extern "C" fn good_sender_body() -> ! {
     unsafe {
         core::arch::asm!(
             "li t0, 0x200040",
-            "li t1, 0x50", "sb t1, 0(t0)",
-            "li t1, 0x49", "sb t1, 1(t0)",
-            "li t1, 0x4e", "sb t1, 2(t0)",
-            "li t1, 0x47", "sb t1, 3(t0)",
-            "li a0, 0", "li a1, 0x200040", "li a2, 4", "li a7, 3", "ecall", // send
-            "li a7, 2", "ecall", // exit
-            "1:", "j 1b",
+            "li t1, 0x50",
+            "sb t1, 0(t0)",
+            "li t1, 0x49",
+            "sb t1, 1(t0)",
+            "li t1, 0x4e",
+            "sb t1, 2(t0)",
+            "li t1, 0x47",
+            "sb t1, 3(t0)",
+            "li a0, 0",
+            "li a1, 0x200040",
+            "li a2, 4",
+            "li a7, 3",
+            "ecall", // send
+            "li a7, 2",
+            "ecall", // exit
+            "1:",
+            "j 1b",
             options(noreturn)
         )
     }

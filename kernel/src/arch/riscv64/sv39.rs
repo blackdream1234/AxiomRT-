@@ -151,7 +151,13 @@ mod tests {
     fn kernel_rx_leaf_has_no_user_bit() {
         let pte = Pte::leaf(
             frame(),
-            Permissions { read: true, write: false, execute: true, user: false, device: false },
+            Permissions {
+                read: true,
+                write: false,
+                execute: true,
+                user: false,
+                device: false,
+            },
         )
         .unwrap();
         assert!(pte.is_leaf());
@@ -168,27 +174,50 @@ mod tests {
 
     #[test]
     fn user_wx_rejected() {
-        let wx = Permissions { read: true, write: true, execute: true, user: true, device: false };
+        let wx = Permissions {
+            read: true,
+            write: true,
+            execute: true,
+            user: true,
+            device: false,
+        };
         assert_eq!(Pte::leaf(frame(), wx), Err(PteError::UserWx));
     }
 
     #[test]
     fn write_without_read_rejected() {
-        let w = Permissions { read: false, write: true, execute: false, user: false, device: false };
+        let w = Permissions {
+            read: false,
+            write: true,
+            execute: false,
+            user: false,
+            device: false,
+        };
         assert_eq!(Pte::leaf(frame(), w), Err(PteError::WriteWithoutRead));
     }
 
     #[test]
     fn no_access_leaf_rejected() {
-        let none =
-            Permissions { read: false, write: false, execute: false, user: true, device: false };
+        let none = Permissions {
+            read: false,
+            write: false,
+            execute: false,
+            user: true,
+            device: false,
+        };
         assert_eq!(Pte::leaf(frame(), none), Err(PteError::NoAccess));
     }
 
     #[test]
     fn misaligned_rejected() {
-        assert_eq!(Pte::leaf(PhysAddr::new(0x8030_0001), Permissions::user_rw()), Err(PteError::Misaligned));
-        assert_eq!(Pte::pointer(PhysAddr::new(0x8030_0001)), Err(PteError::Misaligned));
+        assert_eq!(
+            Pte::leaf(PhysAddr::new(0x8030_0001), Permissions::user_rw()),
+            Err(PteError::Misaligned)
+        );
+        assert_eq!(
+            Pte::pointer(PhysAddr::new(0x8030_0001)),
+            Err(PteError::Misaligned)
+        );
     }
 
     #[test]
@@ -210,7 +239,13 @@ mod tests {
 
     #[test]
     fn device_execute_rejected() {
-        let dx = Permissions { read: true, write: false, execute: true, user: false, device: true };
+        let dx = Permissions {
+            read: true,
+            write: false,
+            execute: true,
+            user: false,
+            device: true,
+        };
         assert_eq!(Pte::leaf(frame(), dx), Err(PteError::DeviceExecute));
     }
 }

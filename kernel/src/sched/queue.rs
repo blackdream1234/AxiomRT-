@@ -33,7 +33,11 @@ struct Fifo {
 
 impl Fifo {
     const fn new() -> Self {
-        Fifo { slots: [None; QUEUE_CAPACITY], head: 0, len: 0 }
+        Fifo {
+            slots: [None; QUEUE_CAPACITY],
+            head: 0,
+            len: 0,
+        }
     }
 
     fn push_back(&mut self, tid: ThreadId) -> Result<(), QueueError> {
@@ -89,9 +93,17 @@ pub struct ReadyQueue {
     levels: [Fifo; PRIORITY_LEVELS],
 }
 
+impl Default for ReadyQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReadyQueue {
     pub const fn new() -> Self {
-        ReadyQueue { levels: [Fifo::new(); PRIORITY_LEVELS] }
+        ReadyQueue {
+            levels: [Fifo::new(); PRIORITY_LEVELS],
+        }
     }
 
     /// Enqueue a ready thread at its priority level (FIFO tail).

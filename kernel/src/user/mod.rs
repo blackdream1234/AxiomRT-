@@ -92,7 +92,10 @@ mod run {
                 out("t0") _,
             );
         }
-        #[cfg(not(any(feature = "isolation_write_unmapped", feature = "isolation_exec_nonexec")))]
+        #[cfg(not(any(
+            feature = "isolation_write_unmapped",
+            feature = "isolation_exec_nonexec"
+        )))]
         unsafe {
             // Default: read kernel memory -> load page fault.
             core::arch::asm!(

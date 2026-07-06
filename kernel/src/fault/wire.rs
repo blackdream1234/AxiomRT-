@@ -112,8 +112,7 @@ pub fn encode(event: &FaultEvent) -> Message {
     buf[10..14].copy_from_slice(&event.thread().as_u32().to_le_bytes());
     buf[14..22].copy_from_slice(&event.pc().to_le_bytes());
     buf[22..30].copy_from_slice(&event.detail().to_le_bytes());
-    Message::new(KERNEL_SENDER, &buf)
-        .expect("kernel invariant: FAULT_WIRE_BYTES <= MSG_MAX_BYTES")
+    Message::new(KERNEL_SENDER, &buf).expect("kernel invariant: FAULT_WIRE_BYTES <= MSG_MAX_BYTES")
 }
 
 /// A decoded fault report on the supervisor side (a *report* about the
@@ -157,7 +156,9 @@ pub fn decode(msg: &Message) -> Result<FaultReport, DecodeError> {
         event_id: u64::from_le_bytes(data[0..8].try_into().expect("length checked")),
         fault_type,
         severity: fault_type.severity(),
-        thread: ThreadId(u32::from_le_bytes(data[10..14].try_into().expect("length checked"))),
+        thread: ThreadId(u32::from_le_bytes(
+            data[10..14].try_into().expect("length checked"),
+        )),
         pc: u64::from_le_bytes(data[14..22].try_into().expect("length checked")),
         detail: u64::from_le_bytes(data[22..30].try_into().expect("length checked")),
     })
@@ -166,19 +167,22 @@ pub fn decode(msg: &Message) -> Result<FaultReport, DecodeError> {
 /// Kernel-side notification: put the event on the fault channel.
 /// The kernel never blocks: "Blocked" from the rendezvous model means
 /// the message is parked in the channel (→ Queued).
-pub fn notify_supervisor(
-    channel: &mut Endpoint,
-    event: &mut FaultEvent,
-) -> NotifyOutcome {
+pub fn notify_supervisor(channel: &mut Endpoint, event: &mut FaultEvent) -> NotifyOutcome {
     let msg = encode(event);
     match ipc::send(channel, KERNEL_SENDER, msg) {
         Ok(SendOutcome::Delivered { .. }) => {
-            event.advance(EventState::Queued).expect("Created -> Queued");
-            event.advance(EventState::Delivered).expect("Queued -> Delivered");
+            event
+                .advance(EventState::Queued)
+                .expect("Created -> Queued");
+            event
+                .advance(EventState::Delivered)
+                .expect("Queued -> Delivered");
             NotifyOutcome::Delivered
         }
         Ok(SendOutcome::Blocked) => {
-            event.advance(EventState::Queued).expect("Created -> Queued");
+            event
+                .advance(EventState::Queued)
+                .expect("Created -> Queued");
             NotifyOutcome::Queued
         }
         Err(_) => NotifyOutcome::ChannelFull,
@@ -207,14 +211,16 @@ pub fn acknowledge(
     if event.state() != EventState::Delivered {
         return Err(AckError::NotPending);
     }
-    event.advance(EventState::Acknowledged).expect("Delivered -> Acknowledged");
+    event
+        .advance(EventState::Acknowledged)
+        .expect("Delivered -> Acknowledged");
     Ok(decision)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::caps::{Capability, CapTable, ObjectRef, ObjectType, Rights};
+    use crate::caps::{CapTable, Capability, ObjectRef, ObjectType, Rights};
     use crate::ipc::{recv_checked, EndpointId, IpcCapError, RecvOutcome};
 
     fn event() -> FaultEvent {
@@ -230,7 +236,10 @@ mod tests {
         t.insert(
             0,
             Capability::new(
-                ObjectRef { object_type: ObjectType::Endpoint, object_id: 9 },
+                ObjectRef {
+                    object_type: ObjectType::Endpoint,
+                    object_id: 9,
+                },
                 Rights::RECEIVE.union(Rights::CONTROL),
             ),
         )
@@ -278,7 +287,10 @@ mod tests {
         let mut ev = event();
 
         // Kernel notifies first: event parks in the channel.
-        assert_eq!(notify_supervisor(&mut channel, &mut ev), NotifyOutcome::Queued);
+        assert_eq!(
+            notify_supervisor(&mut channel, &mut ev),
+            NotifyOutcome::Queued
+        );
         assert_eq!(ev.state(), EventState::Queued);
 
         // Supervisor receives through the capability-checked path.
@@ -296,7 +308,10 @@ mod tests {
         ev.advance(EventState::Delivered).unwrap();
 
         // Explicit recovery decision closes the loop.
-        assert_eq!(acknowledge(&mut ev, RecoveryDecision::Kill), Ok(RecoveryDecision::Kill));
+        assert_eq!(
+            acknowledge(&mut ev, RecoveryDecision::Kill),
+            Ok(RecoveryDecision::Kill)
+        );
         assert_eq!(ev.state(), EventState::Acknowledged);
     }
 
@@ -319,7 +334,10 @@ mod tests {
             .insert(
                 0,
                 Capability::new(
-                    ObjectRef { object_type: ObjectType::Endpoint, object_id: 9 },
+                    ObjectRef {
+                        object_type: ObjectType::Endpoint,
+                        object_id: 9,
+                    },
                     Rights::SEND,
                 ),
             )
@@ -335,14 +353,20 @@ mod tests {
         let mut channel = fault_channel();
         let mut first = event();
         let mut second = FaultEvent::new(43, FaultType::IllegalSyscall, ThreadId(4), 0, 7);
-        assert_eq!(notify_supervisor(&mut channel, &mut first), NotifyOutcome::Queued);
+        assert_eq!(
+            notify_supervisor(&mut channel, &mut first),
+            NotifyOutcome::Queued
+        );
         assert_eq!(
             notify_supervisor(&mut channel, &mut second),
             NotifyOutcome::ChannelFull,
             "second undelivered event cannot queue (bounded)"
         );
         // Caller applies the documented default for the dropped event.
-        assert_eq!(default_decision(second.fault_type()), Some(RecoveryDecision::Kill));
+        assert_eq!(
+            default_decision(second.fault_type()),
+            Some(RecoveryDecision::Kill)
+        );
     }
 
     #[test]
@@ -352,7 +376,10 @@ mod tests {
         ev.advance(EventState::Delivered).unwrap();
         // Double-ack rejected.
         acknowledge(&mut ev, RecoveryDecision::Restart).unwrap();
-        assert_eq!(acknowledge(&mut ev, RecoveryDecision::Kill), Err(AckError::NotPending));
+        assert_eq!(
+            acknowledge(&mut ev, RecoveryDecision::Kill),
+            Err(AckError::NotPending)
+        );
 
         // KernelInvariantViolation admits no supervisor decision.
         let mut fatal = FaultEvent::new(9, FaultType::KernelInvariantViolation, ThreadId(0), 0, 0);

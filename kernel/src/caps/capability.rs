@@ -65,7 +65,10 @@ impl Capability {
     /// Derive a weaker capability for the same object (rights can only
     /// shrink; amplification does not exist as an operation).
     pub const fn derive_diminished(&self, removed: Rights) -> Capability {
-        Capability { object: self.object, rights: self.rights.diminish(removed) }
+        Capability {
+            object: self.object,
+            rights: self.rights.diminish(removed),
+        }
     }
 }
 
@@ -76,7 +79,10 @@ mod tests {
     #[test]
     fn capability_carries_object_and_rights() {
         let c = Capability::new(
-            ObjectRef { object_type: ObjectType::Endpoint, object_id: 3 },
+            ObjectRef {
+                object_type: ObjectType::Endpoint,
+                object_id: 3,
+            },
             Rights::SEND,
         );
         assert_eq!(c.object().object_type, ObjectType::Endpoint);
@@ -88,12 +94,19 @@ mod tests {
     #[test]
     fn derivation_only_diminishes() {
         let full = Capability::new(
-            ObjectRef { object_type: ObjectType::Endpoint, object_id: 1 },
+            ObjectRef {
+                object_type: ObjectType::Endpoint,
+                object_id: 1,
+            },
             Rights::SEND.union(Rights::RECEIVE).union(Rights::GRANT),
         );
         let weak = full.derive_diminished(Rights::GRANT.union(Rights::RECEIVE));
         assert!(weak.rights().contains(Rights::SEND));
         assert!(!weak.rights().contains(Rights::GRANT));
-        assert_eq!(weak.object(), full.object(), "same object, weaker authority");
+        assert_eq!(
+            weak.object(),
+            full.object(),
+            "same object, weaker authority"
+        );
     }
 }

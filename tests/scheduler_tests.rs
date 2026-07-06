@@ -68,7 +68,11 @@ fn highest_priority_task_selected() {
 fn killed_task_not_selected() {
     let mut h = Harness::new(&[(1, 7), (2, 3)]);
     h.set_state(1, ThreadState::Killed);
-    assert_eq!(h.select(), Some(ThreadId(2)), "killed high-prio task must be skipped");
+    assert_eq!(
+        h.select(),
+        Some(ThreadId(2)),
+        "killed high-prio task must be skipped"
+    );
     assert_eq!(h.select(), None, "killed task never reappears");
 }
 
@@ -76,7 +80,11 @@ fn killed_task_not_selected() {
 fn killed_task_not_selected_even_if_still_queued() {
     // Defense in depth (docs/09 §4): state changes without dequeue.
     let mut h = Harness::new(&[(1, 7), (2, 3)]);
-    let t = h.threads.iter_mut().find(|t| t.id() == ThreadId(1)).unwrap();
+    let t = h
+        .threads
+        .iter_mut()
+        .find(|t| t.id() == ThreadId(1))
+        .unwrap();
     t.transition(ThreadState::Killed).unwrap();
     // Deliberately NOT calling mark_not_ready(1): stale queue entry.
     assert_eq!(h.select(), Some(ThreadId(2)));
@@ -88,7 +96,11 @@ fn blocked_task_not_selected() {
     // Thread 1 starts running, then blocks in IPC.
     h.set_state(1, ThreadState::Running);
     h.set_state(1, ThreadState::Blocked);
-    assert_eq!(h.select(), Some(ThreadId(2)), "blocked task must be skipped");
+    assert_eq!(
+        h.select(),
+        Some(ThreadId(2)),
+        "blocked task must be skipped"
+    );
 }
 
 #[test]
@@ -112,5 +124,9 @@ fn faulted_task_not_selected() {
     let mut h = Harness::new(&[(1, 7), (2, 1)]);
     h.set_state(1, ThreadState::Running);
     h.set_state(1, ThreadState::Faulted);
-    assert_eq!(h.select(), Some(ThreadId(2)), "faulted task cannot continue unless recovered");
+    assert_eq!(
+        h.select(),
+        Some(ThreadId(2)),
+        "faulted task cannot continue unless recovered"
+    );
 }

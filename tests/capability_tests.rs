@@ -11,13 +11,20 @@ use kernel::caps::table::{CapError, CapTable, CAP_TABLE_SLOTS};
 use kernel::caps::{Capability, ObjectRef, ObjectType, Rights};
 
 fn endpoint_cap(id: u32, rights: Rights) -> Capability {
-    Capability::new(ObjectRef { object_type: ObjectType::Endpoint, object_id: id }, rights)
+    Capability::new(
+        ObjectRef {
+            object_type: ObjectType::Endpoint,
+            object_id: id,
+        },
+        rights,
+    )
 }
 
 #[test]
 fn lookup_valid_capability() {
     let mut t = CapTable::new();
-    t.insert(0, endpoint_cap(7, Rights::SEND.union(Rights::RECEIVE))).unwrap();
+    t.insert(0, endpoint_cap(7, Rights::SEND.union(Rights::RECEIVE)))
+        .unwrap();
     let obj = t.lookup(0, ObjectType::Endpoint, Rights::SEND).unwrap();
     assert_eq!(obj.object_id, 7);
     assert_eq!(obj.object_type, ObjectType::Endpoint);
@@ -70,8 +77,15 @@ fn revoked_capability_fails_lookup() {
     let mut t = CapTable::new();
     t.insert(3, endpoint_cap(9, Rights::SEND)).unwrap();
     t.revoke(3).unwrap();
-    assert_eq!(t.lookup(3, ObjectType::Endpoint, Rights::SEND), Err(CapError::EmptySlot));
-    assert_eq!(t.revoke(3), Err(CapError::EmptySlot), "double revoke is explicit");
+    assert_eq!(
+        t.lookup(3, ObjectType::Endpoint, Rights::SEND),
+        Err(CapError::EmptySlot)
+    );
+    assert_eq!(
+        t.revoke(3),
+        Err(CapError::EmptySlot),
+        "double revoke is explicit"
+    );
 }
 
 #[test]
@@ -83,7 +97,10 @@ fn insert_rules() {
         Err(CapError::SlotOccupied),
         "no silent overwrite of authority"
     );
-    assert_eq!(t.insert(CAP_TABLE_SLOTS, endpoint_cap(1, Rights::SEND)), Err(CapError::InvalidIndex));
+    assert_eq!(
+        t.insert(CAP_TABLE_SLOTS, endpoint_cap(1, Rights::SEND)),
+        Err(CapError::InvalidIndex)
+    );
 }
 
 #[test]
@@ -93,5 +110,9 @@ fn query_reveals_own_authority_only_as_metadata() {
     let (ty, rights) = t.query(5).unwrap();
     assert_eq!(ty, ObjectType::Endpoint);
     assert!(rights.contains(Rights::SEND));
-    assert_eq!(t.query(6), Err(CapError::EmptySlot), "probing empty slots is a clean error");
+    assert_eq!(
+        t.query(6),
+        Err(CapError::EmptySlot),
+        "probing empty slots is a clean error"
+    );
 }

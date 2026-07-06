@@ -33,9 +33,17 @@ pub struct FixedPriorityScheduler {
     ready: ReadyQueue,
 }
 
+impl Default for FixedPriorityScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FixedPriorityScheduler {
     pub const fn new() -> Self {
-        FixedPriorityScheduler { ready: ReadyQueue::new() }
+        FixedPriorityScheduler {
+            ready: ReadyQueue::new(),
+        }
     }
 
     /// Make a thread eligible for selection at the given priority.
