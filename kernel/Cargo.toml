@@ -24,6 +24,8 @@ demo_preempt = []
 demo_watchdog = []
 # On-target IPC rendezvous demo (AXIOM-IPCRT, v0.6). Off by default.
 demo_ipc = []
+# On-target capability enforcement demo (AXIOM-CAPRT, v0.7). Off by default.
+demo_cap = []
 
 [lib]
 name = "kernel"

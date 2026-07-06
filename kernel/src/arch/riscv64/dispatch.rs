@@ -29,8 +29,38 @@ const SYS_SEND: u64 = 3;
 const SYS_RECV: u64 = 4;
 
 // Result codes returned in a0 (docs/04_SYSCALL_MODEL.md).
+const ERR_INVALID_CAP: i64 = -2;
+const ERR_INSUFFICIENT_RIGHTS: i64 = -3;
+const ERR_WRONG_OBJECT_TYPE: i64 = -4;
 const ERR_INVALID_ARG: i64 = -5;
 const ERR_MSG_TOO_LARGE: i64 = -6;
+
+// On-target capabilities (AXIOM-CAPRT). Rights bits match the host
+// model (docs/06_CAPABILITY_MODEL.md §2).
+const OTYPE_ENDPOINT: u8 = 0;
+const RIGHT_SEND: u16 = 1 << 3;
+const RIGHT_RECV: u16 = 1 << 4;
+/// Capability slots per task (small, static).
+const CAPS_PER_TASK: usize = 4;
+/// The single demo endpoint's object id (docs/18 §3).
+const DEMO_ENDPOINT_ID: u32 = 1;
+
+/// On-target capability: (object type, object id, rights). The running
+/// form of the host `Capability` (docs/06 §3).
+#[derive(Clone, Copy)]
+struct Cap {
+    otype: u8,
+    object_id: u32,
+    rights: u16,
+}
+
+/// Outcome of a capability lookup (fixed check order, docs/06 §4).
+enum CapCheck {
+    Ok,
+    InvalidCap,
+    WrongType,
+    InsufficientRights,
+}
 
 /// On-target run state of a task control block. The scheduler never
 /// selects Killed/Faulted/Blocked (docs/09 §4).
@@ -59,6 +89,9 @@ struct Tcb {
     /// (user destination VA, byte length). Applied by `resume_task`
     /// once this task's address space is active (AXIOM-IPCRT-006).
     pending_ipc: Option<(u64, usize)>,
+    /// Per-task capability table (AXIOM-CAPRT-002). Minted at boot; user
+    /// code holds only an index into it.
+    caps: [Option<Cap>; CAPS_PER_TASK],
     name: &'static str,
 }
 
@@ -68,6 +101,7 @@ const EMPTY_TCB: Tcb = Tcb {
     satp_root: 0,
     frame: TrapFrame { regs: [0; 31], sepc: 0, sstatus: 0 },
     pending_ipc: None,
+    caps: [None; CAPS_PER_TASK],
     name: "",
 };
 
@@ -140,12 +174,57 @@ pub unsafe fn register_task(
         satp_root: root.as_u64(),
         frame,
         pending_ipc: None,
+        caps: [None; CAPS_PER_TASK],
         name,
     };
     // SAFETY: exclusive boot-time access to a distinct slot.
     unsafe {
         let tasks = &mut *addr_of_mut!(TASKS);
         tasks[idx] = tcb;
+    }
+}
+
+/// Mint an endpoint capability into task `idx`'s table slot `slot`
+/// (AXIOM-CAPRT-001). Boot-time only.
+///
+/// # Safety
+/// Called at boot before dispatching, single hart, distinct `idx`/`slot`.
+#[allow(dead_code)]
+pub unsafe fn set_endpoint_cap(idx: usize, slot: usize, object_id: u32, rights: u16) {
+    // SAFETY: exclusive boot-time access.
+    let tasks = tasks_mut();
+    tasks[idx].caps[slot] = Some(Cap { otype: OTYPE_ENDPOINT, object_id, rights });
+}
+
+/// Resolve `cap_index` in task `cur`'s table for the endpoint with the
+/// `required` right, in the fixed order of docs/06 §4.
+fn cap_check(cur: usize, cap_index: usize, required: u16) -> CapCheck {
+    let tasks = tasks_mut();
+    if cap_index >= CAPS_PER_TASK {
+        return CapCheck::InvalidCap;
+    }
+    match tasks[cur].caps[cap_index] {
+        None => CapCheck::InvalidCap,
+        Some(c) if c.otype != OTYPE_ENDPOINT || c.object_id != DEMO_ENDPOINT_ID => {
+            CapCheck::WrongType
+        }
+        Some(c) if c.rights & required != required => CapCheck::InsufficientRights,
+        Some(_) => CapCheck::Ok,
+    }
+}
+
+/// Map a failed capability check to a syscall error code and emit the
+/// CAP_DENIED evidence (docs/18 §3). The endpoint is never touched.
+fn deny_cap(cur_name: &str, check: CapCheck) -> i64 {
+    uart::put_str("CAP_DENIED task=");
+    uart::put_str(cur_name);
+    uart::put_str(" reason=no_valid_capability\n");
+    uart::put_str("IPC state=unchanged\n");
+    match check {
+        CapCheck::InvalidCap => ERR_INVALID_CAP,
+        CapCheck::WrongType => ERR_WRONG_OBJECT_TYPE,
+        CapCheck::InsufficientRights => ERR_INSUFFICIENT_RIGHTS,
+        CapCheck::Ok => 0,
     }
 }
 
@@ -438,9 +517,19 @@ pub fn watchdog_tick(frame: &mut TrapFrame) -> bool {
 /// copy-based. Blocks if no receiver is waiting (docs/17 §5).
 fn ipc_send(frame: &mut TrapFrame) {
     let cur = CURRENT.load(Ordering::SeqCst);
+    let cap_index = frame.regs[9] as usize; // a0
     let buf = frame.regs[10]; // a1
     let len = frame.regs[11] as usize; // a2
     let cur_name = tasks_mut()[cur].name;
+
+    // Capability enforcement (AXIOM-CAPRT-005): resolve the endpoint
+    // capability with the Send right BEFORE touching the endpoint.
+    if let check @ (CapCheck::InvalidCap | CapCheck::WrongType | CapCheck::InsufficientRights) =
+        cap_check(cur, cap_index, RIGHT_SEND)
+    {
+        frame.set_a0(deny_cap(cur_name, check));
+        return;
+    }
 
     if len > IPC_MSG_MAX {
         frame.set_a0(ERR_MSG_TOO_LARGE);
@@ -489,9 +578,19 @@ fn ipc_send(frame: &mut TrapFrame) {
 /// waiting (docs/17 §5).
 fn ipc_recv(frame: &mut TrapFrame) {
     let cur = CURRENT.load(Ordering::SeqCst);
+    let cap_index = frame.regs[9] as usize; // a0
     let dst = frame.regs[10]; // a1
     let cap = frame.regs[11] as usize; // a2
     let cur_name = tasks_mut()[cur].name;
+
+    // Capability enforcement (AXIOM-CAPRT-005): resolve the endpoint
+    // capability with the Receive right BEFORE touching the endpoint.
+    if let check @ (CapCheck::InvalidCap | CapCheck::WrongType | CapCheck::InsufficientRights) =
+        cap_check(cur, cap_index, RIGHT_RECV)
+    {
+        frame.set_a0(deny_cap(cur_name, check));
+        return;
+    }
 
     match ep_get() {
         Ep::SenderWaiting { tid, len } => {

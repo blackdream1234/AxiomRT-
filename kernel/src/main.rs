@@ -73,6 +73,11 @@ mod watchdog_demo;
 #[path = "arch/riscv64/ipc_demo.rs"]
 mod ipc_demo;
 
+// On-target capability enforcement demo (v0.7, feature-gated).
+#[cfg(all(target_arch = "riscv64", feature = "demo_cap"))]
+#[path = "arch/riscv64/cap_demo.rs"]
+mod cap_demo;
+
 // User task layer (Phase 7). The image model is target-independent and
 // unit-tested on the host. Transitional allowance: the model is
 // consumed on target by the user-mode transition (AXIOM-USER-002).
@@ -100,22 +105,32 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     // mappings carry no U bit (docs/12_MMU_SV39.md §4).
     paging_hw::enable_kernel_paging();
 
-    // Select the on-target demo (none returns): IPC (v0.6), watchdog
-    // (v0.5), timer preemption (v0.4), two-task cooperative dispatch
-    // (v0.3), or the v0.2 single-task memory-isolation demo by default.
-    // At most one demo_* feature is expected to be set at a time.
-    #[cfg(feature = "demo_ipc")]
+    // Select the on-target demo (none returns): capabilities (v0.7),
+    // IPC (v0.6), watchdog (v0.5), timer preemption (v0.4), two-task
+    // cooperative dispatch (v0.3), or the v0.2 single-task
+    // memory-isolation demo by default. At most one demo_* feature is
+    // expected to be set at a time.
+    #[cfg(feature = "demo_cap")]
+    {
+        cap_demo::cap_demo()
+    }
+    #[cfg(all(feature = "demo_ipc", not(feature = "demo_cap")))]
     {
         ipc_demo::ipc_demo()
     }
-    #[cfg(all(feature = "demo_watchdog", not(feature = "demo_ipc")))]
+    #[cfg(all(
+        feature = "demo_watchdog",
+        not(feature = "demo_ipc"),
+        not(feature = "demo_cap")
+    ))]
     {
         watchdog_demo::watchdog_demo()
     }
     #[cfg(all(
         feature = "demo_preempt",
         not(feature = "demo_watchdog"),
-        not(feature = "demo_ipc")
+        not(feature = "demo_ipc"),
+        not(feature = "demo_cap")
     ))]
     {
         preempt::preempt_demo()
@@ -124,7 +139,8 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
         feature = "demo_multitask",
         not(feature = "demo_preempt"),
         not(feature = "demo_watchdog"),
-        not(feature = "demo_ipc")
+        not(feature = "demo_ipc"),
+        not(feature = "demo_cap")
     ))]
     {
         multitask::multitask_demo()
@@ -133,7 +149,8 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
         feature = "demo_multitask",
         feature = "demo_preempt",
         feature = "demo_watchdog",
-        feature = "demo_ipc"
+        feature = "demo_ipc",
+        feature = "demo_cap"
     )))]
     {
         user::first_user_task_demo()

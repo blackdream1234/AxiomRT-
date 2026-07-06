@@ -141,3 +141,13 @@ U-mode tasks in separate address spaces: the receiver blocks
 address spaces (`IPC delivered bytes=4`), both tasks exit, and no
 `PANIC` appears. This is the v0.6 gate evidence that bounded,
 copy-based, blocking IPC works on target with no shared memory.
+
+## On-Target Capability Enforcement QEMU Test (AXIOM-CAPRT-008, v0.7)
+
+Script: `tests/capability_qemu_test.sh` — builds with `--features
+demo_cap`, boots, and asserts a send from a task without a valid
+capability is denied (`CAP_DENIED ... reason=no_valid_capability`) with
+the endpoint unchanged (`IPC state=unchanged`), that a send from a task
+holding the Send capability then delivers (`IPC delivered bytes=4`), and
+that no `PANIC` appears. This is the v0.7 gate evidence that every IPC
+operation is capability-controlled on target (deny-by-default).

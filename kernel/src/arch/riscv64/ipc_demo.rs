@@ -26,6 +26,7 @@ extern "C" fn receiver_body() -> ! {
     // SAFETY: pure syscall control flow; never returns.
     unsafe {
         core::arch::asm!(
+            "li a0, 0",        // capability index (Receive cap)
             "li a1, 0x200040", // buffer VA (in this task's stack page)
             "li a2, 64",       // capacity
             "li a7, 4",        // sys_recv
@@ -51,6 +52,7 @@ extern "C" fn sender_body() -> ! {
             "li t1, 0x49", "sb t1, 1(t0)", // 'I'
             "li t1, 0x4e", "sb t1, 2(t0)", // 'N'
             "li t1, 0x47", "sb t1, 3(t0)", // 'G'
+            "li a0, 0",        // capability index (Send cap)
             "li a1, 0x200040", // buffer VA
             "li a2, 4",        // length
             "li a7, 3",        // sys_send
@@ -84,6 +86,17 @@ pub fn ipc_demo() -> ! {
         uart::put_str("TASK_STARTED task=");
         uart::put_str(name);
         uart::put_str("\n");
+    }
+
+    // Mint the endpoint capabilities (AXIOM-CAPRT): receiver holds
+    // Receive, sender holds Send, both at cap index 0.
+    const ENDPOINT_ID: u32 = 1;
+    const RIGHT_SEND: u16 = 1 << 3;
+    const RIGHT_RECV: u16 = 1 << 4;
+    // SAFETY: boot-time capability minting, single hart, distinct slots.
+    unsafe {
+        dispatch::set_endpoint_cap(0, 0, ENDPOINT_ID, RIGHT_RECV); // receiver
+        dispatch::set_endpoint_cap(1, 0, ENDPOINT_ID, RIGHT_SEND); // sender
     }
 
     // SAFETY: both tasks registered with valid address spaces; the trap
