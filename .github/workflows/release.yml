@@ -1,0 +1,43 @@
+# Release packaging (AXIOM-CI-001, roadmap §14).
+# On a version tag (or manually): assemble the evaluation kit, build
+# the axiomctl binary, checksum everything, upload as artifacts.
+# No publishing step — releases are cut deliberately, never implicitly.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU (kit smoke check)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-misc
+      - name: Add RISC-V target
+        run: rustup target add riscv64gc-unknown-none-elf
+      - name: Build kernel (release)
+        run: cargo build --release
+      - name: Boot smoke test
+        run: ./tests/boot_smoke_test.sh
+      - name: Assemble evaluation kit
+        run: ./scripts/build_eval_kit.sh
+      - name: Build axiomctl (release, host)
+        run: cargo build --release --target x86_64-unknown-linux-gnu -p axiomctl -p studio
+      - name: Checksums
+        run: |
+          mkdir -p release/out
+          cp target/x86_64-unknown-linux-gnu/release/axiomctl release/out/
+          cp target/x86_64-unknown-linux-gnu/release/studio release/out/
+          tar -C release -czf release/out/evaluation_kit.tar.gz \
+            "$(ls release | grep Industrial_Evaluation_Kit)"
+          (cd release/out && sha256sum * > checksums.txt && cat checksums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axiomrt-release
+          path: release/out/

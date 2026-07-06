@@ -1,0 +1,27 @@
+# Coq model compilation (AXIOM-CI-001, roadmap §14).
+# Model-level theorems must keep compiling; refinement to code is an
+# explicit TODO boundary (docs/11_VERIFICATION_PLAN.md).
+name: coq
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  coq-models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Coq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y coq
+      - name: Compile models
+        working-directory: proofs/coq
+        run: |
+          coqc MemoryIsolation.v
+          coqc CapabilityAccess.v
+          coqc SchedulerPriority.v

@@ -1,0 +1,25 @@
+# Full verification sweep (AXIOM-CI-001, roadmap §14).
+# Same entry point evaluators use: scripts/verify_all.sh
+# (9 QEMU serial-assertion tests + host suites + Coq models).
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify-all:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU and Coq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-misc coq
+      - name: Add RISC-V target
+        run: rustup target add riscv64gc-unknown-none-elf
+      - name: Full sweep
+        run: ./scripts/verify_all.sh

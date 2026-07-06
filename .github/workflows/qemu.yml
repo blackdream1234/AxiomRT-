@@ -1,0 +1,40 @@
+# QEMU serial-assertion tests only (AXIOM-CI-001, roadmap §14).
+# Faster signal than the full sweep when only target behavior changed.
+name: qemu
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  qemu-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-misc
+      - name: Add RISC-V target
+        run: rustup target add riscv64gc-unknown-none-elf
+      - name: Boot smoke test
+        run: ./tests/boot_smoke_test.sh
+      - name: Memory isolation
+        run: ./tests/memory_isolation_qemu_test.sh
+      - name: Two-task dispatch
+        run: ./tests/two_task_qemu_test.sh
+      - name: Timer preemption
+        run: ./tests/timer_preemption_qemu_test.sh
+      - name: Watchdog containment
+        run: ./tests/watchdog_qemu_test.sh
+      - name: IPC rendezvous
+        run: ./tests/ipc_rendezvous_qemu_test.sh
+      - name: Capability enforcement
+        run: ./tests/capability_qemu_test.sh
+      - name: Supervisor recovery chain
+        run: ./tests/supervisor_qemu_test.sh
+      - name: Full fault-containment demo
+        run: ./tests/full_fault_containment_demo_qemu_test.sh

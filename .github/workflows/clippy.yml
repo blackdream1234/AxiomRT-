@@ -1,0 +1,28 @@
+# Formatting and lint gates (AXIOM-CI-001, roadmap §14).
+# The workspace default target is bare-metal riscv64, so clippy runs
+# twice: kernel for the bare-metal target, whole workspace (incl. host
+# tests and tools) for the host target (docs/23_AXIOMCTL_CLI.md §2).
+name: clippy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  fmt-and-clippy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add RISC-V target and components
+        run: |
+          rustup target add riscv64gc-unknown-none-elf
+          rustup component add clippy rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: clippy (kernel, riscv64 bare metal)
+        run: cargo clippy -p kernel -- -D warnings
+      - name: clippy (workspace, host, all targets)
+        run: cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
