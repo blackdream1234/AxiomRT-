@@ -38,6 +38,19 @@ mod trap;
 #[path = "arch/riscv64/paging_hw.rs"]
 mod paging_hw;
 
+// On-target cooperative task dispatcher (v0.3, AXIOM-SCHEDRT-001..006).
+// Always compiled on target (the trap layer calls it); inert until
+// tasks are registered by the multitask demo.
+#[cfg(target_arch = "riscv64")]
+#[path = "arch/riscv64/dispatch.rs"]
+mod dispatch;
+
+// Two-task cooperative demo (v0.3, feature-gated so the default build
+// keeps the v0.2 memory-isolation demo and its tests).
+#[cfg(all(target_arch = "riscv64", feature = "demo_multitask"))]
+#[path = "arch/riscv64/multitask.rs"]
+mod multitask;
+
 // User task layer (Phase 7). The image model is target-independent and
 // unit-tested on the host. Transitional allowance: the model is
 // consumed on target by the user-mode transition (AXIOM-USER-002).
@@ -65,10 +78,17 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     // mappings carry no U bit (docs/12_MMU_SV39.md §4).
     paging_hw::enable_kernel_paging();
 
-    // Phase 7 (AXIOM-USER-002): run the first user task outside kernel
-    // privilege. Never returns: the user session ends in the registered
-    // kernel continuation (docs/10_USER_MODE.md).
-    user::first_user_task_demo()
+    // v0.3 (AXIOM-SCHEDRT): the two-task cooperative dispatch demo, or
+    // the v0.2 single-task memory-isolation demo by default. Neither
+    // returns (docs/13_DISPATCH.md, docs/10_USER_MODE.md).
+    #[cfg(feature = "demo_multitask")]
+    {
+        multitask::multitask_demo()
+    }
+    #[cfg(not(feature = "demo_multitask"))]
+    {
+        user::first_user_task_demo()
+    }
 }
 
 /// Host stub: the kernel binary has no meaning off-target. It exists

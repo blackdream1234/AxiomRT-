@@ -146,7 +146,7 @@ mod run {
 
         // Build the user address space (kernel maps U=0 for the trap
         // handler + user code/stack U=1) and switch to it.
-        let uas = paging_hw::build_demo_user_address_space(code_phys, stack_phys);
+        let uas = paging_hw::build_user_address_space(0, code_phys, stack_phys);
         // SAFETY: uas.root is a freshly built Sv39 root that maps the
         // kernel regions (U=0) identity, so this code and its stack stay
         // valid across the satp switch (docs/12_MMU_SV39.md §5/§7).

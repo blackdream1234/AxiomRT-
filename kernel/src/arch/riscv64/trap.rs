@@ -19,7 +19,11 @@ pub mod syscall;
 /// Layout contract: `regs[i]` holds general register `x(i+1)`;
 /// `sepc` is the trapped program counter; `sstatus` carries the
 /// pre-trap privilege in SPP. Must stay in sync with trap.S.
+///
+/// Copy/Clone so the dispatcher can snapshot a task's context into its
+/// control block and restore another (AXIOM-SCHEDRT-002).
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct TrapFrame {
     pub regs: [u64; 31],
     pub sepc: u64,
@@ -41,6 +45,19 @@ impl TrapFrame {
     /// True if the trap was taken from user mode (AXIOM-USER-002).
     pub fn from_user(&self) -> bool {
         self.sstatus & SSTATUS_SPP == 0
+    }
+
+    /// Synthesize the initial context of a fresh user task
+    /// (AXIOM-SCHEDRT-002): entry PC in `sepc`, user stack in x2/sp,
+    /// SPP=0 so `sret` drops to U-mode, SPIE=1. All other registers
+    /// zeroed. Used by the multitask dispatcher (feature-gated demo).
+    #[allow(dead_code)]
+    pub fn new_user(entry: u64, user_sp: u64) -> Self {
+        // sstatus.SPIE (bit 5) set, SPP (bit 8) clear.
+        const SSTATUS_SPIE: u64 = 1 << 5;
+        let mut f = TrapFrame { regs: [0; 31], sepc: entry, sstatus: SSTATUS_SPIE };
+        f.regs[1] = user_sp; // x2 = sp
+        f
     }
 }
 
@@ -195,10 +212,18 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
         // handled by OpenSBI in M-mode and never delegated here
         // (docs/10_TRAP_MODEL.md §5).
         CAUSE_ECALL_FROM_U => {
-            let result = syscall::dispatch(frame.a7(), frame);
-            frame.set_a0(result);
-            // Resume after the 4-byte ecall instruction, never re-execute it.
+            let num = frame.a7();
+            // Resume after the 4-byte ecall instruction, never re-execute
+            // it (advance before any context switch so a yielding task
+            // resumes past its ecall, AXIOM-SCHEDRT-005).
             frame.sepc = frame.sepc.wrapping_add(4);
+            // The on-target dispatcher consumes yield/exit (switching the
+            // live frame to the next task); everything else takes the
+            // normal syscall path. Inert until tasks are registered.
+            if !crate::dispatch::on_syscall(num, frame) {
+                let result = syscall::dispatch(num, frame);
+                frame.set_a0(result);
+            }
         }
 
         // An S-mode ecall reaching the kernel means trap delegation is

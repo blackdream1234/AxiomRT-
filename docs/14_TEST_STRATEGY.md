@@ -100,3 +100,13 @@ end):
 Each case asserts `MMU status=enabled` and `kernel=survived`. This is
 the v0.2 gate evidence that memory isolation is MMU-enforced for the
 tested cases.
+
+## Two-Task Dispatch QEMU Test (AXIOM-SCHEDRT-007, v0.3)
+
+Script: `tests/two_task_qemu_test.sh` — builds with `--features
+demo_multitask`, boots, and asserts both tasks start, execution
+alternates (both `SCHED selected=task_a` and `SCHED selected=task_b`
+appear), both tasks exit, and the demo completes
+(`phase=multitask-demo-complete`). Restores the default build
+afterwards. This is the v0.3 gate evidence that two U-mode tasks run
+and cooperatively switch on target.

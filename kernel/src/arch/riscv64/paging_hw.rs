@@ -33,8 +33,12 @@ const UART_PAGE: u64 = 0x1000_0000;
 /// Lives in .bss, therefore inside the R+W data span it maps for itself.
 static mut KERNEL_TABLES: [Table; ARENA_TABLES] = [Table::zeroed(); ARENA_TABLES];
 
-/// Static user table arena (one demo user address space in v0.2).
-static mut USER_TABLES: [Table; ARENA_TABLES] = [Table::zeroed(); ARENA_TABLES];
+/// Maximum concurrent user address spaces on target (v0.3).
+pub const MAX_USER_AS: usize = 4;
+
+/// Static user table arenas, one per user address space.
+static mut USER_TABLES: [[Table; ARENA_TABLES]; MAX_USER_AS] =
+    [[Table::zeroed(); ARENA_TABLES]; MAX_USER_AS];
 
 fn sym(addr: &'static u8) -> u64 {
     // addr_of! obtains the linker symbol address without forming a
@@ -119,19 +123,28 @@ const USER_CODE_VA: u64 = 0x1_0000;
 const USER_STACK_VA: u64 = 0x20_0000;
 const USER_STACK_PAGES: u64 = 1;
 
-/// Build the demo user address space (AXIOM-MEMHW-005/006): kernel
-/// mappings (U=0) for the trap handler, plus the task's U=1 code and
-/// stack pages mapped at user virtual addresses.
+/// Build a user address space (AXIOM-MEMHW-005/006; multi-AS in v0.3):
+/// kernel mappings (U=0) for the trap handler, plus the task's U=1 code
+/// and stack pages mapped at user virtual addresses. `as_index` selects
+/// one of the MAX_USER_AS static table arenas.
 ///
 /// `code_phys` is the physical address of the user entry function, and
 /// `stack_phys` the physical base of its stack frame (both provided by
 /// the caller from static/linker addresses).
-pub fn build_demo_user_address_space(code_phys: u64, stack_phys: u64) -> UserAddressSpace {
+pub fn build_user_address_space(
+    as_index: usize,
+    code_phys: u64,
+    stack_phys: u64,
+) -> UserAddressSpace {
+    assert!(as_index < MAX_USER_AS, "user AS index out of range");
     let r = kernel_regions();
-    let base_pa = core::ptr::addr_of!(USER_TABLES) as u64;
     // SAFETY: USER_TABLES is a static built once at boot on a single
-    // hart before entering user mode; no aliasing reference exists.
-    let tables: &mut [Table] = unsafe { &mut *core::ptr::addr_of_mut!(USER_TABLES) };
+    // hart before entering user mode; each as_index selects a disjoint
+    // arena, so no aliasing reference exists.
+    let all: &mut [[Table; ARENA_TABLES]; MAX_USER_AS] =
+        unsafe { &mut *core::ptr::addr_of_mut!(USER_TABLES) };
+    let base_pa = core::ptr::addr_of!(all[as_index]) as u64;
+    let tables: &mut [Table] = &mut all[as_index];
     let mut arena = Arena::new(tables, base_pa);
 
     // Kernel mappings (U=0) so the trap handler runs post-trap.
