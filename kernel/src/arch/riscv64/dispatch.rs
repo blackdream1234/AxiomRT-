@@ -11,7 +11,7 @@
 //! activated, and its saved frame is loaded so the trap return resumes
 //! it. riscv64-only.
 
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use kernel::memory::PhysAddr;
 
@@ -65,6 +65,13 @@ pub const MAX_TASKS: usize = 4;
 static mut TASKS: [Tcb; MAX_TASKS] = [EMPTY_TCB; MAX_TASKS];
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Watchdog miss counter for the running task (AXIOM-WDOG-003): ticks
+/// since its last check-in. Reset on any syscall and on every switch.
+static WATCHDOG_MISS: AtomicU64 = AtomicU64::new(0);
+/// Ticks a task may run without checking in before it is judged stuck
+/// (docs/16 §3). Small for a prompt demo.
+const WATCHDOG_WINDOW: u64 = 4;
 
 extern "C" {
     /// S→U transition (arch/riscv64/user_entry.S), used for the very
@@ -177,6 +184,9 @@ pub fn on_syscall(num: u64, frame: &mut TrapFrame) -> bool {
     if !ACTIVE.load(Ordering::SeqCst) {
         return false;
     }
+    // Any syscall is a watchdog check-in (AXIOM-WDOG-002): the running
+    // task is making progress, so reset its miss counter.
+    WATCHDOG_MISS.store(0, Ordering::SeqCst);
     match num {
         SYS_YIELD => {
             switch(frame, false);
@@ -212,6 +222,7 @@ fn switch(frame: &mut TrapFrame, exiting: bool) {
         Some(next) => {
             tasks[next].state = RtState::Running;
             CURRENT.store(next, Ordering::SeqCst);
+            WATCHDOG_MISS.store(0, Ordering::SeqCst); // fresh window
             emit("SCHED selected=", tasks[next].name);
             let root = PhysAddr::new(tasks[next].satp_root);
             // SAFETY: next task's address space maps the kernel (U=0),
@@ -258,9 +269,55 @@ pub fn preempt(frame: &mut TrapFrame) {
     tasks[cur].state = RtState::Ready;
     tasks[next].state = RtState::Running;
     CURRENT.store(next, Ordering::SeqCst);
+    WATCHDOG_MISS.store(0, Ordering::SeqCst); // fresh window
     let root = PhysAddr::new(tasks[next].satp_root);
     // SAFETY: next task's address space maps the kernel (U=0); the trap
     // handler, trap stack, and frame stay valid across the switch.
     unsafe { paging_hw::switch_to_user_space(root) };
     *frame = tasks[next].frame;
+}
+
+/// Watchdog tick (AXIOM-WDOG-004/005/006). Increments the running
+/// task's miss counter; if it exceeds the window, the task is judged
+/// stuck (CPU exhaustion): emit the WatchdogTimeout fault event,
+/// contain it (→ Faulted, never rescheduled), and switch to the
+/// highest-priority Ready task. Returns true if it faulted/switched
+/// (the caller then skips ordinary preemption). Runs before preemption
+/// on each tick so an equal-or-higher-priority hog is still contained.
+pub fn watchdog_tick(frame: &mut TrapFrame) -> bool {
+    if !ACTIVE.load(Ordering::SeqCst) {
+        return false;
+    }
+    let misses = WATCHDOG_MISS.fetch_add(1, Ordering::SeqCst) + 1;
+    if misses <= WATCHDOG_WINDOW {
+        return false;
+    }
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let tasks = tasks_mut();
+    // Emit the fault-model event and contain the task (docs/06, docs/16).
+    emit("FAULT type=WatchdogTimeout task=", tasks[cur].name);
+    uart::put_str("CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive\n");
+    tasks[cur].state = RtState::Faulted;
+
+    match select_highest(cur) {
+        Some(next) => {
+            tasks[next].state = RtState::Running;
+            CURRENT.store(next, Ordering::SeqCst);
+            WATCHDOG_MISS.store(0, Ordering::SeqCst);
+            emit("SCHED selected=", tasks[next].name);
+            let root = PhysAddr::new(tasks[next].satp_root);
+            // SAFETY: next task's address space maps the kernel (U=0);
+            // handler, trap stack, and frame stay valid across the switch.
+            unsafe { paging_hw::switch_to_user_space(root) };
+            *frame = tasks[next].frame;
+        }
+        None => {
+            uart::put_str("SCHED idle=no_ready_task\n");
+            uart::put_str("KERNEL alive=true\n");
+            loop {
+                core::hint::spin_loop();
+            }
+        }
+    }
+    true
 }

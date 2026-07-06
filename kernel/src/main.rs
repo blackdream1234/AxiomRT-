@@ -63,6 +63,11 @@ mod multitask;
 #[path = "arch/riscv64/preempt.rs"]
 mod preempt;
 
+// Watchdog / CPU-exhaustion demo (v0.5, feature-gated).
+#[cfg(all(target_arch = "riscv64", feature = "demo_watchdog"))]
+#[path = "arch/riscv64/watchdog_demo.rs"]
+mod watchdog_demo;
+
 // User task layer (Phase 7). The image model is target-independent and
 // unit-tested on the host. Transitional allowance: the model is
 // consumed on target by the user-mode transition (AXIOM-USER-002).
@@ -90,18 +95,30 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     // mappings carry no U bit (docs/12_MMU_SV39.md §4).
     paging_hw::enable_kernel_paging();
 
-    // Select the on-target demo (none returns): timer preemption (v0.4),
-    // two-task cooperative dispatch (v0.3), or the v0.2 single-task
-    // memory-isolation demo by default (docs/15, docs/13, docs/10).
-    #[cfg(feature = "demo_preempt")]
+    // Select the on-target demo (none returns): watchdog (v0.5), timer
+    // preemption (v0.4), two-task cooperative dispatch (v0.3), or the
+    // v0.2 single-task memory-isolation demo by default.
+    #[cfg(feature = "demo_watchdog")]
+    {
+        watchdog_demo::watchdog_demo()
+    }
+    #[cfg(all(feature = "demo_preempt", not(feature = "demo_watchdog")))]
     {
         preempt::preempt_demo()
     }
-    #[cfg(all(feature = "demo_multitask", not(feature = "demo_preempt")))]
+    #[cfg(all(
+        feature = "demo_multitask",
+        not(feature = "demo_preempt"),
+        not(feature = "demo_watchdog")
+    ))]
     {
         multitask::multitask_demo()
     }
-    #[cfg(not(any(feature = "demo_multitask", feature = "demo_preempt")))]
+    #[cfg(not(any(
+        feature = "demo_multitask",
+        feature = "demo_preempt",
+        feature = "demo_watchdog"
+    )))]
     {
         user::first_user_task_demo()
     }

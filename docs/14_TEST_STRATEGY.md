@@ -120,3 +120,14 @@ in favour of a high-priority task, that the critical task runs and
 exits, and that **no `PANIC` line appears** (the kernel stays alive
 despite the infinite loop). This is the v0.4 gate evidence that the
 scheduler is preemptive and a runaway task cannot freeze the kernel.
+
+## Watchdog QEMU Test (AXIOM-WDOG-008, v0.5)
+
+Script: `tests/watchdog_qemu_test.sh` — builds with `--features
+demo_watchdog`, boots, and asserts an infinite compute loop that never
+checks in is detected as a watchdog timeout
+(`FAULT type=WatchdogTimeout task=faulty_task`), contained
+(`CONTAIN ... reason=watchdog_timeout action=faulted`), that the
+critical task then runs (`SCHED selected=critical_task`), and that no
+`PANIC` appears. This is the v0.5 gate evidence that CPU exhaustion is
+detected and contained while a critical task continues.

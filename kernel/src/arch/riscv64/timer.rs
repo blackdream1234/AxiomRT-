@@ -77,7 +77,12 @@ pub fn on_timer_interrupt(frame: &mut TrapFrame) {
         uart::put_str("\n");
     }
     arm_next();
-    dispatch::preempt(frame);
+    // Watchdog runs first (AXIOM-WDOG-004): a stuck task is contained
+    // even if preemption alone would not displace it. If it faulted and
+    // switched, skip ordinary preemption this tick.
+    if !dispatch::watchdog_tick(frame) {
+        dispatch::preempt(frame);
+    }
 }
 
 fn put_dec(mut v: u64) {

@@ -20,6 +20,8 @@ isolation_exec_nonexec = []
 demo_multitask = []
 # Timer preemption demo (AXIOM-TIMER, v0.4). Off by default.
 demo_preempt = []
+# Watchdog / CPU-exhaustion demo (AXIOM-WDOG, v0.5). Off by default.
+demo_watchdog = []
 
 [lib]
 name = "kernel"
