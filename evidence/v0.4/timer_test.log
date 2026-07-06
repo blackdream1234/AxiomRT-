@@ -1,0 +1,8 @@
+ok: TASK_STARTED task=low_loop
+ok: TASK_STARTED task=critical_task
+ok: TIMER tick=1
+ok: SCHED preempt=low_loop selected=critical_task
+ok: SYSCALL name=sys_yield task=critical_task
+ok: TASK_EXITED task=critical_task
+ok: no PANIC (kernel stayed alive under the infinite loop)
+PASS: timer preemption test

@@ -1,0 +1,16 @@
+MMU status=enabled mode=sv39 scope=kernel
+TASK_STARTED task=low_loop
+TASK_STARTED task=critical_task
+TIMER tick=1
+SCHED preempt=low_loop selected=critical_task
+SYSCALL name=sys_yield task=critical_task
+SCHED selected=critical_task
+SYSCALL name=sys_yield task=critical_task
+SCHED selected=critical_task
+SYSCALL name=sys_yield task=critical_task
+SCHED selected=critical_task
+SYSCALL name=sys_exit task=critical_task
+TASK_EXITED task=critical_task
+SCHED selected=low_loop
+TIMER tick=2
+TIMER tick=3
