@@ -56,6 +56,12 @@ run_case() {
 # AXIOM-MEMHW-009: user read of kernel memory -> load page fault.
 run_case "" "user_access_kernel_memory" "read-kernel"
 
+# AXIOM-MEMHW-010: user write to an unmapped address -> store page fault.
+run_case "--features isolation_write_unmapped" "user_access_unmapped" "write-unmapped"
+
+# AXIOM-MEMHW-011: user execute of a non-executable page -> inst page fault.
+run_case "--features isolation_exec_nonexec" "user_execute_nonexecutable" "exec-nonexec"
+
 # Restore the default build for subsequent tests.
 cargo build --release >/dev/null 2>&1
 

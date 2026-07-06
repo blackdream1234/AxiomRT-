@@ -7,6 +7,15 @@ description = "AxiomRT microkernel: formally specified safety runtime for RISC-V
 # Zero external dependencies (docs/07_CODEX_RULES.md §7).
 [dependencies]
 
+# Memory-isolation demo probe selection for the QEMU negative tests
+# (AXIOM-MEMHW-010/011). Default (no feature) = user reads kernel memory.
+# These features only change the demo user task's forbidden access; they
+# never weaken a check (docs/12_MMU_SV39.md §7).
+[features]
+default = []
+isolation_write_unmapped = []
+isolation_exec_nonexec = []
+
 [lib]
 name = "kernel"
 path = "src/lib.rs"

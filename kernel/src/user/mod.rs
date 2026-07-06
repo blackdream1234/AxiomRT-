@@ -53,18 +53,48 @@ mod run {
 
     /// A kernel address the user task tries (and fails) to read.
     const KERNEL_PROBE_ADDR: u64 = 0x8020_0000;
+    /// An unmapped user address (write-fault probe, AXIOM-MEMHW-010).
+    const UNMAPPED_USER_ADDR: u64 = 0x40_0000;
+    /// The user stack VA, mapped R+W but not executable
+    /// (execute-fault probe, AXIOM-MEMHW-011).
+    const NONEXEC_USER_ADDR: u64 = 0x20_0000;
 
-    /// The demo user task. Runs at privilege U under its own page table:
-    /// it attempts to read kernel memory, which the MMU refuses (the
-    /// page is mapped U=0). The resulting page fault is contained.
+    /// The demo user task. Runs at privilege U under its own page table
+    /// and performs one forbidden memory access that the MMU refuses;
+    /// the resulting page fault is contained. The specific access is
+    /// selected at build time for the memory-isolation QEMU tests
+    /// (docs/12_MMU_SV39.md §7); the default is a read of kernel memory.
     ///
     /// Position-independent: uses only immediates and its own stack, so
     /// it runs correctly from its user virtual mapping.
     extern "C" fn demo_user_task() -> ! {
-        // SAFETY: this load is *meant* to fault — a U-mode read of a
-        // kernel-only page. It never completes; no state escapes. t0/t1
-        // are declared clobbered.
+        // SAFETY: each variant is *meant* to fault (U-mode access to a
+        // kernel-only, unmapped, or non-executable page). It never
+        // completes; no state escapes. Clobbered registers are declared.
+        #[cfg(feature = "isolation_write_unmapped")]
         unsafe {
+            // Store to an unmapped user address -> store page fault.
+            core::arch::asm!(
+                "li t0, {addr}",
+                "sd zero, 0(t0)",
+                addr = const UNMAPPED_USER_ADDR,
+                out("t0") _,
+            );
+        }
+        #[cfg(feature = "isolation_exec_nonexec")]
+        unsafe {
+            // Jump into a non-executable user page -> instruction page
+            // fault at that address.
+            core::arch::asm!(
+                "li t0, {addr}",
+                "jalr zero, 0(t0)",
+                addr = const NONEXEC_USER_ADDR,
+                out("t0") _,
+            );
+        }
+        #[cfg(not(any(feature = "isolation_write_unmapped", feature = "isolation_exec_nonexec")))]
+        unsafe {
+            // Default: read kernel memory -> load page fault.
             core::arch::asm!(
                 "li t0, {addr}",
                 "ld t1, 0(t0)",
