@@ -1,0 +1,13 @@
+ok: TASK_STARTED task=critical_task
+ok: TASK_STARTED task=supervisor_task
+ok: TASK_STARTED task=logger_task
+ok: TASK_STARTED task=faulty_task
+ok: CAP_DENIED task=faulty_task reason=no_valid_capability
+ok: IPC state=unchanged
+ok: FAULT type=WatchdogTimeout task=faulty_task
+ok: IPC delivered fault_event to=supervisor_task
+ok: LOGGER event=TASK_FAULTED task=faulty_task
+ok: RECOVERY_APPLIED policy=Kill
+ok: critical_task continues (kept being scheduled)
+ok: no PANIC (kernel alive under attack)
+PASS: full fault-containment demo (DEMO result=pass)
