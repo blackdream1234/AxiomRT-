@@ -50,6 +50,11 @@ impl Pte {
         Pte(0)
     }
 
+    /// Reinterpret raw PTE bits read back from a table (page-table walk).
+    pub const fn from_bits(bits: u64) -> Self {
+        Pte(bits)
+    }
+
     pub const fn bits(self) -> u64 {
         self.0
     }

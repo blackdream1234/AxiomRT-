@@ -16,6 +16,11 @@ pub mod pagetable;
 #[path = "../arch/riscv64/sv39.rs"]
 pub mod sv39;
 
+// Sv39 page table construction: index-based arena walk (v0.2,
+// AXIOM-MEMHW-003). Host-testable; on-target activation in paging_hw.
+#[path = "../arch/riscv64/paging.rs"]
+pub mod paging;
+
 pub use address::{PhysAddr, VirtAddr, PAGE_SIZE};
 
 /// Identifier of an AddressSpace (docs/03_KERNEL_OBJECTS.md §3).
