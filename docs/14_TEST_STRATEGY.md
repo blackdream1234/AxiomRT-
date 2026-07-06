@@ -163,3 +163,15 @@ with a recovery policy (`RECOVERY_APPLIED policy=Kill`), with no
 (kernel → supervisor → recovery, plus logger evidence) runs on target;
 the host supervisor crate tests still cover the decision logic and the
 capability-bypass rejection.
+
+## Full Four-Task Fault-Containment Demo (AXIOM-DEMO-002, v0.9)
+
+Script: `tests/full_fault_containment_demo_qemu_test.sh` — builds with
+`--features demo_full`, boots, and asserts the charter's first
+demonstration (docs/00_PROJECT_CHARTER.md §7): all four tasks start, the
+faulty task's illegal IPC is denied with the endpoint unchanged, its CPU
+exhaustion is contained as a watchdog timeout, the fault reaches the
+supervisor and logger, the supervisor applies a recovery policy, the
+critical task **continues running** after the faulty task is killed
+(≥3 schedules), and no `PANIC` appears. This is the v0.9 gate: the
+integrated safety demonstration passes.

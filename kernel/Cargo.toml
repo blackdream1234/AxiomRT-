@@ -28,6 +28,8 @@ demo_ipc = []
 demo_cap = []
 # On-target supervisor + logger fault-recovery demo (AXIOM-SUPRT, v0.8).
 demo_supervisor = []
+# Full four-task fault-containment demo (AXIOM-DEMO, v0.9). Off by default.
+demo_full = []
 
 [lib]
 name = "kernel"
