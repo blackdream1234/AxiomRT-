@@ -1,0 +1,10 @@
+# axiomctl — AxiomRT developer CLI (AXIOM-CLI-001).
+# Requirement reference: docs/23_AXIOMCTL_CLI.md.
+# Host-side tool; std, zero external dependencies (docs/07_CODEX_RULES.md).
+
+[package]
+name = "axiomctl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]

@@ -9,3 +9,9 @@ target = "riscv64gc-unknown-none-elf"
 # Linker script added by AXIOM-BOOT-002. Only used when linking a binary;
 # `cargo check` does not need it. Run cargo from the repository root.
 rustflags = ["-C", "link-arg=-Tkernel/linker.ld"]
+
+# axiomctl developer CLI (AXIOM-CLI-001, docs/23_AXIOMCTL_CLI.md).
+# The alias pins the host target because [build].target above is
+# bare-metal riscv64. Non-x86_64 hosts: use the explicit --target form.
+[alias]
+axiomctl = "run --quiet --target x86_64-unknown-linux-gnu -p axiomctl --"

@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["kernel"]
+members = ["kernel", "tools/axiomctl"]
+# Only the kernel builds by default: the workspace's default cargo
+# target is bare-metal riscv64 (.cargo/config.toml), which cannot host
+# the std-based axiomctl CLI. Build the CLI with an explicit host
+# target (`cargo axiomctl ...`, docs/23_AXIOMCTL_CLI.md §2).
+default-members = ["kernel"]
 
 # Bare-metal kernel: unwinding is impossible; abort keeps the panic path
 # small and deterministic (docs/06_FAULT_MODEL.md, KernelInvariantViolation).
