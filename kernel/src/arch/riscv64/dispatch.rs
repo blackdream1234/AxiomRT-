@@ -27,6 +27,7 @@ const SYS_YIELD: u64 = 1;
 const SYS_EXIT: u64 = 2;
 const SYS_SEND: u64 = 3;
 const SYS_RECV: u64 = 4;
+const SYS_FAULT_ACK: u64 = 7;
 
 // Result codes returned in a0 (docs/04_SYSCALL_MODEL.md).
 const ERR_INVALID_CAP: i64 = -2;
@@ -42,8 +43,6 @@ const RIGHT_SEND: u16 = 1 << 3;
 const RIGHT_RECV: u16 = 1 << 4;
 /// Capability slots per task (small, static).
 const CAPS_PER_TASK: usize = 4;
-/// The single demo endpoint's object id (docs/18 §3).
-const DEMO_ENDPOINT_ID: u32 = 1;
 
 /// On-target capability: (object type, object id, rights). The running
 /// form of the host `Capability` (docs/06 §3).
@@ -55,11 +54,22 @@ struct Cap {
 }
 
 /// Outcome of a capability lookup (fixed check order, docs/06 §4).
+/// On success carries the resolved endpoint id.
 enum CapCheck {
-    Ok,
+    Ok(u32),
     InvalidCap,
     WrongType,
     InsufficientRights,
+}
+
+/// A deferred message delivery: destination user VA plus the embedded
+/// payload (copied into the target's buffer when it next runs). Embedding
+/// the bytes keeps kernel notifications and user IPC independent.
+#[derive(Clone, Copy)]
+struct PendingMsg {
+    dst: u64,
+    len: usize,
+    data: [u8; IPC_MSG_MAX],
 }
 
 /// On-target run state of a task control block. The scheduler never
@@ -85,10 +95,11 @@ struct Tcb {
     satp_root: u64,
     /// Saved full register context (AXIOM-SCHEDRT-002).
     frame: TrapFrame,
-    /// Deferred IPC delivery to complete when this task next runs:
-    /// (user destination VA, byte length). Applied by `resume_task`
+    /// Deferred IPC delivery to complete when this task next runs. The
+    /// payload is embedded (not shared) so kernel notifications and
+    /// user messages use independent storage. Applied by `resume_task`
     /// once this task's address space is active (AXIOM-IPCRT-006).
-    pending_ipc: Option<(u64, usize)>,
+    pending_ipc: Option<PendingMsg>,
     /// Per-task capability table (AXIOM-CAPRT-002). Minted at boot; user
     /// code holds only an index into it.
     caps: [Option<Cap>; CAPS_PER_TASK],
@@ -126,7 +137,7 @@ const IPC_MSG_MAX: usize = 64;
 const USER_DATA_VA: u64 = 0x20_0000;
 const USER_DATA_END: u64 = USER_DATA_VA + 0x1000;
 
-/// Single demo endpoint state (docs/17 §3).
+/// Endpoint state (docs/17 §3). One in-flight rendezvous per endpoint.
 #[derive(Clone, Copy)]
 enum Ep {
     Idle,
@@ -134,9 +145,12 @@ enum Ep {
     ReceiverWaiting { tid: usize, dst: u64, cap: usize },
 }
 
-static mut ENDPOINT: Ep = Ep::Idle;
-/// Kernel staging buffer: one bounded in-flight message, no shared
-/// memory (docs/17 §2).
+/// Endpoint ids used on target: 1 = demo log endpoint (v0.6/0.7),
+/// 2 = fault channel (supervisor), 3 = event channel (logger) — v0.8.
+const NUM_ENDPOINTS: usize = 4;
+static mut ENDPOINTS: [Ep; NUM_ENDPOINTS] = [Ep::Idle; NUM_ENDPOINTS];
+/// Kernel staging buffer for user send→recv copies (bounded, no shared
+/// memory, docs/17 §2).
 static mut KMSG: [u8; IPC_MSG_MAX] = [0; IPC_MSG_MAX];
 
 extern "C" {
@@ -196,8 +210,9 @@ pub unsafe fn set_endpoint_cap(idx: usize, slot: usize, object_id: u32, rights: 
     tasks[idx].caps[slot] = Some(Cap { otype: OTYPE_ENDPOINT, object_id, rights });
 }
 
-/// Resolve `cap_index` in task `cur`'s table for the endpoint with the
-/// `required` right, in the fixed order of docs/06 §4.
+/// Resolve `cap_index` in task `cur`'s table for an endpoint capability
+/// with the `required` right, in the fixed order of docs/06 §4. On
+/// success returns the endpoint id the capability names.
 fn cap_check(cur: usize, cap_index: usize, required: u16) -> CapCheck {
     let tasks = tasks_mut();
     if cap_index >= CAPS_PER_TASK {
@@ -205,11 +220,9 @@ fn cap_check(cur: usize, cap_index: usize, required: u16) -> CapCheck {
     }
     match tasks[cur].caps[cap_index] {
         None => CapCheck::InvalidCap,
-        Some(c) if c.otype != OTYPE_ENDPOINT || c.object_id != DEMO_ENDPOINT_ID => {
-            CapCheck::WrongType
-        }
+        Some(c) if c.otype != OTYPE_ENDPOINT => CapCheck::WrongType,
         Some(c) if c.rights & required != required => CapCheck::InsufficientRights,
-        Some(_) => CapCheck::Ok,
+        Some(c) => CapCheck::Ok(c.object_id),
     }
 }
 
@@ -224,7 +237,7 @@ fn deny_cap(cur_name: &str, check: CapCheck) -> i64 {
         CapCheck::InvalidCap => ERR_INVALID_CAP,
         CapCheck::WrongType => ERR_WRONG_OBJECT_TYPE,
         CapCheck::InsufficientRights => ERR_INSUFFICIENT_RIGHTS,
-        CapCheck::Ok => 0,
+        CapCheck::Ok(_) => 0,
     }
 }
 
@@ -234,13 +247,13 @@ fn tasks_mut() -> &'static mut [Tcb; MAX_TASKS] {
     unsafe { &mut *addr_of_mut!(TASKS) }
 }
 
-fn ep_get() -> Ep {
+fn ep_get(id: u32) -> Ep {
     // SAFETY: single-hart, non-reentrant dispatcher state.
-    unsafe { *addr_of!(ENDPOINT) }
+    unsafe { (*addr_of!(ENDPOINTS))[id as usize] }
 }
-fn ep_set(e: Ep) {
+fn ep_set(id: u32, e: Ep) {
     // SAFETY: single-hart, non-reentrant dispatcher state.
-    unsafe { *addr_of_mut!(ENDPOINT) = e };
+    unsafe { (*addr_of_mut!(ENDPOINTS))[id as usize] = e };
 }
 
 /// Select the highest-priority Ready task, round-robin among equals
@@ -320,11 +333,18 @@ fn copy_from_user(va: u64, len: usize) {
 /// Copy `len` bytes from KMSG into the running task's user buffer. The
 /// caller must have validated the range and the receiver's satp is active.
 fn copy_to_user(va: u64, len: usize) {
+    let kmsg = unsafe { *addr_of!(KMSG) };
+    copy_bytes_to_user(va, &kmsg[..len]);
+}
+
+/// Copy an explicit byte slice into the running task's user buffer
+/// (used for embedded pending messages and kernel notifications). The
+/// destination range must be validated and the target satp active.
+fn copy_bytes_to_user(va: u64, bytes: &[u8]) {
     set_sum();
-    let kmsg = unsafe { &*addr_of!(KMSG) };
-    for i in 0..len {
+    for (i, &b) in bytes.iter().enumerate() {
         // SAFETY: validated user range, SUM set, byte-wise volatile write.
-        unsafe { write_volatile((va + i as u64) as *mut u8, kmsg[i]) };
+        unsafe { write_volatile((va + i as u64) as *mut u8, b) };
     }
     clear_sum();
 }
@@ -344,11 +364,11 @@ fn resume_task(next: usize, frame: &mut TrapFrame) {
     // handler, trap stack, and this frame stay valid across the switch.
     unsafe { paging_hw::switch_to_user_space(root) };
     *frame = tasks[next].frame;
-    if let Some((dst, len)) = tasks[next].pending_ipc.take() {
-        copy_to_user(dst, len);
-        frame.set_a0(len as i64);
+    if let Some(pm) = tasks[next].pending_ipc.take() {
+        copy_bytes_to_user(pm.dst, &pm.data[..pm.len]);
+        frame.set_a0(pm.len as i64);
         uart::put_str("IPC delivered bytes=");
-        put_dec(len as u64);
+        put_dec(pm.len as u64);
         uart::put_str("\n");
     }
 }
@@ -398,6 +418,10 @@ pub fn on_syscall(num: u64, frame: &mut TrapFrame) -> bool {
         }
         SYS_RECV => {
             ipc_recv(frame);
+            true
+        }
+        SYS_FAULT_ACK => {
+            fault_ack(frame);
             true
         }
         _ => false,
@@ -491,13 +515,16 @@ pub fn watchdog_tick(frame: &mut TrapFrame) -> bool {
         return false;
     }
     let cur = CURRENT.load(Ordering::SeqCst);
-    let tasks = tasks_mut();
-    emit("FAULT type=WatchdogTimeout task=", tasks[cur].name);
+    let cur_name = tasks_mut()[cur].name;
+    emit("FAULT type=WatchdogTimeout task=", cur_name);
     uart::put_str("CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive\n");
-    tasks[cur].state = RtState::Faulted;
+    tasks_mut()[cur].state = RtState::Faulted;
+    // Notify the supervisor (fault channel) and logger (event channel)
+    // if they are waiting (AXIOM-SUPRT-005/008).
+    notify_supervisor_and_logger(cur_name);
     match select_highest(cur) {
         Some(next) => {
-            emit("SCHED selected=", tasks[next].name);
+            emit("SCHED selected=", tasks_mut()[next].name);
             resume_task(next, frame);
         }
         None => {
@@ -513,8 +540,8 @@ pub fn watchdog_tick(frame: &mut TrapFrame) -> bool {
 
 // ---- IPC syscalls (AXIOM-IPCRT-004..009) --------------------------------
 
-/// sys_send: a1 = user buffer VA, a2 = length. Synchronous, bounded,
-/// copy-based. Blocks if no receiver is waiting (docs/17 §5).
+/// sys_send: a0 = cap index, a1 = buffer VA, a2 = length. Synchronous,
+/// bounded, copy-based, capability-controlled. Blocks if no receiver.
 fn ipc_send(frame: &mut TrapFrame) {
     let cur = CURRENT.load(Ordering::SeqCst);
     let cap_index = frame.regs[9] as usize; // a0
@@ -524,12 +551,13 @@ fn ipc_send(frame: &mut TrapFrame) {
 
     // Capability enforcement (AXIOM-CAPRT-005): resolve the endpoint
     // capability with the Send right BEFORE touching the endpoint.
-    if let check @ (CapCheck::InvalidCap | CapCheck::WrongType | CapCheck::InsufficientRights) =
-        cap_check(cur, cap_index, RIGHT_SEND)
-    {
-        frame.set_a0(deny_cap(cur_name, check));
-        return;
-    }
+    let ep_id = match cap_check(cur, cap_index, RIGHT_SEND) {
+        CapCheck::Ok(id) => id,
+        other => {
+            frame.set_a0(deny_cap(cur_name, other));
+            return;
+        }
+    };
 
     if len > IPC_MSG_MAX {
         frame.set_a0(ERR_MSG_TOO_LARGE);
@@ -544,25 +572,27 @@ fn ipc_send(frame: &mut TrapFrame) {
     // Copy the sender's buffer into the kernel now (sender satp active).
     copy_from_user(buf, len);
 
-    match ep_get() {
+    match ep_get(ep_id) {
         Ep::ReceiverWaiting { tid, dst, cap } => {
             emit("IPC send task=", cur_name);
             uart::put_str("IPC endpoint=log op=send\n");
+            let kmsg = unsafe { *addr_of!(KMSG) };
             let tasks = tasks_mut();
             if len <= cap && valid_user_buf(dst, len) {
-                // Stage delivery; the receiver completes the copy when
-                // it next runs (its satp) — AXIOM-IPCRT-006.
-                tasks[tid].pending_ipc = Some((dst, len));
+                // Stage delivery with an embedded payload; the receiver
+                // completes the copy when it next runs (AXIOM-IPCRT-006).
+                let mut pm = PendingMsg { dst, len, data: [0; IPC_MSG_MAX] };
+                pm.data[..len].copy_from_slice(&kmsg[..len]);
+                tasks[tid].pending_ipc = Some(pm);
             } else {
                 tasks[tid].frame.set_a0(ERR_MSG_TOO_LARGE);
             }
             tasks[tid].state = RtState::Ready;
-            ep_set(Ep::Idle);
+            ep_set(ep_id, Ep::Idle);
             frame.set_a0(len as i64); // send completes
-            // sender continues running.
         }
         Ep::Idle => {
-            ep_set(Ep::SenderWaiting { tid: cur, len });
+            ep_set(ep_id, Ep::SenderWaiting { tid: cur, len });
             emit("IPC send task=", cur_name);
             uart::put_str("IPC endpoint=log op=send state=blocked\n");
             block_and_switch(frame); // send blocks until a receiver
@@ -574,8 +604,8 @@ fn ipc_send(frame: &mut TrapFrame) {
     }
 }
 
-/// sys_recv: a1 = user buffer VA, a2 = capacity. Blocks if no sender is
-/// waiting (docs/17 §5).
+/// sys_recv: a0 = cap index, a1 = buffer VA, a2 = capacity. Blocks if no
+/// sender. Capability-controlled.
 fn ipc_recv(frame: &mut TrapFrame) {
     let cur = CURRENT.load(Ordering::SeqCst);
     let cap_index = frame.regs[9] as usize; // a0
@@ -583,29 +613,27 @@ fn ipc_recv(frame: &mut TrapFrame) {
     let cap = frame.regs[11] as usize; // a2
     let cur_name = tasks_mut()[cur].name;
 
-    // Capability enforcement (AXIOM-CAPRT-005): resolve the endpoint
-    // capability with the Receive right BEFORE touching the endpoint.
-    if let check @ (CapCheck::InvalidCap | CapCheck::WrongType | CapCheck::InsufficientRights) =
-        cap_check(cur, cap_index, RIGHT_RECV)
-    {
-        frame.set_a0(deny_cap(cur_name, check));
-        return;
-    }
+    let ep_id = match cap_check(cur, cap_index, RIGHT_RECV) {
+        CapCheck::Ok(id) => id,
+        other => {
+            frame.set_a0(deny_cap(cur_name, other));
+            return;
+        }
+    };
 
-    match ep_get() {
+    match ep_get(ep_id) {
         Ep::SenderWaiting { tid, len } => {
             if len > cap || !valid_user_buf(dst, len) {
                 frame.set_a0(ERR_INVALID_ARG);
                 emit("IPC_DENIED op=recv reason=bad_buffer task=", cur_name);
                 return;
             }
-            // Complete the copy into the receiver's buffer (recv satp).
             copy_to_user(dst, len);
             frame.set_a0(len as i64);
             let tasks = tasks_mut();
             tasks[tid].state = RtState::Ready; // sender's send completes
             tasks[tid].frame.set_a0(len as i64);
-            ep_set(Ep::Idle);
+            ep_set(ep_id, Ep::Idle);
             emit("IPC recv task=", cur_name);
             uart::put_str("IPC delivered bytes=");
             put_dec(len as u64);
@@ -617,7 +645,7 @@ fn ipc_recv(frame: &mut TrapFrame) {
                 emit("IPC_DENIED op=recv reason=bad_buffer task=", cur_name);
                 return;
             }
-            ep_set(Ep::ReceiverWaiting { tid: cur, dst, cap });
+            ep_set(ep_id, Ep::ReceiverWaiting { tid: cur, dst, cap });
             emit("IPC recv task=", cur_name);
             uart::put_str("IPC endpoint=log op=recv state=blocked\n");
             block_and_switch(frame); // recv blocks until a sender
@@ -627,4 +655,73 @@ fn ipc_recv(frame: &mut TrapFrame) {
             emit("IPC_DENIED op=recv reason=busy task=", cur_name);
         }
     }
+}
+
+// ---- Supervisor / logger notification (AXIOM-SUPRT-005/008) -------------
+
+/// Deliver a one-byte notification to whatever task is blocked receiving
+/// on endpoint `ep_id` (the fault channel or event channel). Used by the
+/// kernel to push a fault/monitoring event to the supervisor/logger. If
+/// no receiver is waiting, the notification is dropped (the demo blocks
+/// its supervisor/logger on recv first). Returns the notified task, if
+/// any, so the caller can note it.
+fn notify_endpoint(ep_id: u32, code: u8) -> Option<usize> {
+    if let Ep::ReceiverWaiting { tid, dst, cap } = ep_get(ep_id) {
+        if cap >= 1 && valid_user_buf(dst, 1) {
+            let mut pm = PendingMsg { dst, len: 1, data: [0; IPC_MSG_MAX] };
+            pm.data[0] = code;
+            let tasks = tasks_mut();
+            tasks[tid].pending_ipc = Some(pm);
+            tasks[tid].state = RtState::Ready;
+        }
+        ep_set(ep_id, Ep::Idle);
+        Some(tid)
+    } else {
+        None
+    }
+}
+
+/// Endpoint ids for the supervisor/logger channels (docs/19).
+const EP_FAULT: u32 = 2;
+const EP_EVENT: u32 = 3;
+/// Fault descriptor code delivered to the supervisor/logger.
+const FAULT_CODE_WATCHDOG: u8 = 4;
+
+/// Notify the supervisor (fault channel) and logger (event channel) that
+/// `faulted_name` was contained (AXIOM-SUPRT-005/008). Called from the
+/// fault paths. The supervisor's recovery decision is applied when it
+/// acknowledges (sys_fault_ack).
+fn notify_supervisor_and_logger(faulted_name: &str) {
+    if notify_endpoint(EP_FAULT, FAULT_CODE_WATCHDOG).is_some() {
+        emit("IPC delivered fault_event to=supervisor_task from=", faulted_name);
+    }
+    if notify_endpoint(EP_EVENT, FAULT_CODE_WATCHDOG).is_some() {
+        uart::put_str("LOGGER event=TASK_FAULTED task=");
+        uart::put_str(faulted_name);
+        uart::put_str("\n");
+    }
+}
+
+/// sys_fault_ack: a1 = recovery decision code (2 = Kill). The supervisor
+/// closes the fault-handling loop; the kernel records the applied policy
+/// (AXIOM-SUPRT-006/007). The faulted task is already contained
+/// (Faulted); Kill is the terminal recovery in the demo.
+fn fault_ack(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let cur_name = tasks_mut()[cur].name;
+    let decision = frame.regs[10]; // a1
+    let policy = match decision {
+        2 => "Kill",
+        1 => "Restart",
+        _ => "Escalate",
+    };
+    uart::put_str("SUPERVISOR decision=");
+    uart::put_str(policy);
+    uart::put_str(" by=");
+    uart::put_str(cur_name);
+    uart::put_str("\n");
+    uart::put_str("RECOVERY_APPLIED policy=");
+    uart::put_str(policy);
+    uart::put_str("\n");
+    frame.set_a0(0); // OK
 }

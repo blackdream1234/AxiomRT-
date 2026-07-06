@@ -26,6 +26,8 @@ demo_watchdog = []
 demo_ipc = []
 # On-target capability enforcement demo (AXIOM-CAPRT, v0.7). Off by default.
 demo_cap = []
+# On-target supervisor + logger fault-recovery demo (AXIOM-SUPRT, v0.8).
+demo_supervisor = []
 
 [lib]
 name = "kernel"

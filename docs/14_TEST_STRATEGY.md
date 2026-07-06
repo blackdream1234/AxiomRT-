@@ -151,3 +151,15 @@ the endpoint unchanged (`IPC state=unchanged`), that a send from a task
 holding the Send capability then delivers (`IPC delivered bytes=4`), and
 that no `PANIC` appears. This is the v0.7 gate evidence that every IPC
 operation is capability-controlled on target (deny-by-default).
+
+## On-Target Supervisor QEMU Test (AXIOM-SUPRT-008, v0.8)
+
+Script: `tests/supervisor_qemu_test.sh` — builds with `--features
+demo_supervisor`, boots, and asserts a contained fault is delivered to
+the supervisor over IPC (`IPC delivered fault_event to=supervisor_task`),
+recorded by the logger (`LOGGER event=TASK_FAULTED`), and acknowledged
+with a recovery policy (`RECOVERY_APPLIED policy=Kill`), with no
+`PANIC`. This is the v0.8 gate evidence that the fault-recovery chain
+(kernel → supervisor → recovery, plus logger evidence) runs on target;
+the host supervisor crate tests still cover the decision logic and the
+capability-bypass rejection.

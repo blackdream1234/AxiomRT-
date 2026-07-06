@@ -78,6 +78,11 @@ mod ipc_demo;
 #[path = "arch/riscv64/cap_demo.rs"]
 mod cap_demo;
 
+// On-target supervisor + logger fault-recovery demo (v0.8, feature-gated).
+#[cfg(all(target_arch = "riscv64", feature = "demo_supervisor"))]
+#[path = "arch/riscv64/supervisor_demo.rs"]
+mod supervisor_demo;
+
 // User task layer (Phase 7). The image model is target-independent and
 // unit-tested on the host. Transitional allowance: the model is
 // consumed on target by the user-mode transition (AXIOM-USER-002).
@@ -110,11 +115,19 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     // cooperative dispatch (v0.3), or the v0.2 single-task
     // memory-isolation demo by default. At most one demo_* feature is
     // expected to be set at a time.
-    #[cfg(feature = "demo_cap")]
+    #[cfg(feature = "demo_supervisor")]
+    {
+        supervisor_demo::supervisor_demo()
+    }
+    #[cfg(all(feature = "demo_cap", not(feature = "demo_supervisor")))]
     {
         cap_demo::cap_demo()
     }
-    #[cfg(all(feature = "demo_ipc", not(feature = "demo_cap")))]
+    #[cfg(all(
+        feature = "demo_ipc",
+        not(feature = "demo_cap"),
+        not(feature = "demo_supervisor")
+    ))]
     {
         ipc_demo::ipc_demo()
     }
@@ -150,7 +163,8 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
         feature = "demo_preempt",
         feature = "demo_watchdog",
         feature = "demo_ipc",
-        feature = "demo_cap"
+        feature = "demo_cap",
+        feature = "demo_supervisor"
     )))]
     {
         user::first_user_task_demo()
