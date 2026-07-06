@@ -1,0 +1,17 @@
+MMU status=enabled mode=sv39 scope=kernel
+TASK_STARTED task=receiver
+TASK_STARTED task=sender
+IPC recv task=receiver
+IPC endpoint=log op=recv state=blocked
+SCHED selected=sender
+IPC send task=sender
+IPC endpoint=log op=send
+SYSCALL name=sys_exit task=sender
+TASK_EXITED task=sender
+SCHED selected=receiver
+IPC delivered bytes=4
+SYSCALL name=sys_exit task=receiver
+TASK_EXITED task=receiver
+SCHED idle=all_tasks_done
+KERNEL alive=true
+phase=multitask-demo-complete

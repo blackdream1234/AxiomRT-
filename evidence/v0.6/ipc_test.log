@@ -1,0 +1,10 @@
+ok: TASK_STARTED task=receiver
+ok: TASK_STARTED task=sender
+ok: IPC recv task=receiver
+ok: state=blocked
+ok: IPC send task=sender
+ok: IPC delivered bytes=4
+ok: TASK_EXITED task=sender
+ok: TASK_EXITED task=receiver
+ok: no PANIC
+PASS: IPC rendezvous test
