@@ -144,7 +144,7 @@ mod policy_tests {
         // Critical task behavior is preserved: containing a faulty task
         // touches nothing else, and the scheduler still selects the
         // critical task (docs/06, WatchdogTimeout kernel action).
-        let mut critical = live_thread(1);
+        let critical = live_thread(1);
         let mut faulty = live_thread(2);
         let mut sched = FixedPriorityScheduler::new();
         sched.mark_ready(critical.id(), Priority::MAX).unwrap();

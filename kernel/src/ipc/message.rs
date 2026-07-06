@@ -89,6 +89,7 @@ mod tests {
         let mut src = [9u8; 4];
         let m = Message::new(ThreadId(3), &src).unwrap();
         src[0] = 0; // mutating the source after send must not matter
+        assert_eq!(src[0], 0, "source buffer was really mutated");
         assert_eq!(m.data(), &[9, 9, 9, 9], "no shared memory: payload was copied");
     }
 }
