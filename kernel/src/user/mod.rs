@@ -1,11 +1,14 @@
-//! AxiomRT user task layer (Phase 7).
+//! AxiomRT user task layer (Phase 7; v0.2 memory isolation).
 //!
-//! Requirement reference: docs/03_KERNEL_OBJECTS.md, docs/10_USER_MODE.md.
+//! Requirement reference: docs/03_KERNEL_OBJECTS.md, docs/10_USER_MODE.md,
+//! docs/12_MMU_SV39.md.
 //!
-//! AXIOM-USER-001: the user image *model* — descriptors that say what a
-//! user task is (entry, stack region, address space).
-//! AXIOM-USER-002: the first controlled S→U transition and the trap-path
-//! return, including fault containment (kernel survives user faults).
+//! AXIOM-USER-001: the user image *model* (entry, stack, address space).
+//! AXIOM-USER-002: the first controlled S→U transition and fault
+//! containment.
+//! AXIOM-MEMHW-005..007: run the demo user task under its own Sv39 page
+//! table so memory isolation is hardware-enforced — U-mode cannot read
+//! kernel memory (it takes a page fault, contained).
 
 pub mod image;
 
@@ -21,6 +24,7 @@ mod run {
     use kernel::memory::AddressSpaceId;
 
     use super::UserImage;
+    use crate::paging_hw;
     use crate::trap;
     use crate::uart;
 
@@ -41,32 +45,33 @@ mod run {
     struct TrapStack([u8; 8 * 1024]);
     static mut USER_TRAP_STACK: TrapStack = TrapStack([0; 8 * 1024]);
 
-    /// Stack for the demo user task. Pre-MMU interim: physically in
-    /// kernel RAM (docs/10_USER_MODE.md §5 documents this limitation).
-    #[repr(C, align(16))]
+    /// Physical stack frame for the demo user task, mapped into the user
+    /// address space at a user virtual address (docs/12_MMU_SV39.md §5).
+    #[repr(C, align(4096))]
     struct UserStack([u8; 4 * 1024]);
     static mut DEMO_USER_STACK: UserStack = UserStack([0; 4 * 1024]);
 
-    /// The first user task. Runs at privilege U: it can only ecall and
-    /// fault — every privileged operation traps to the kernel.
+    /// A kernel address the user task tries (and fails) to read.
+    const KERNEL_PROBE_ADDR: u64 = 0x8020_0000;
+
+    /// The demo user task. Runs at privilege U under its own page table:
+    /// it attempts to read kernel memory, which the MMU refuses (the
+    /// page is mapped U=0). The resulting page fault is contained.
+    ///
+    /// Position-independent: uses only immediates and its own stack, so
+    /// it runs correctly from its user virtual mapping.
     extern "C" fn demo_user_task() -> ! {
-        // 1. Syscall round trip: sys_yield then sys_exit (stubs), each
-        //    returning through the trap path.
-        // SAFETY: `ecall` from U-mode is the architecturally defined
-        // syscall entry (docs/04_SYSCALL_MODEL.md ABI); the kernel trap
-        // path saves/restores all registers except a0 (result), which
-        // is declared clobbered here along with a7 (number).
+        // SAFETY: this load is *meant* to fault — a U-mode read of a
+        // kernel-only page. It never completes; no state escapes. t0/t1
+        // are declared clobbered.
         unsafe {
-            core::arch::asm!("li a7, 1", "ecall", out("a7") _, out("a0") _);
-            core::arch::asm!("li a7, 2", "ecall", out("a7") _, out("a0") _);
-        }
-        // 2. Deliberate fault: reading a privileged CSR from U-mode
-        //    raises IllegalInstruction. The kernel must contain it and
-        //    survive (AXIOM-USER-002 definition of done).
-        // SAFETY: this instruction is *meant* to trap; it never
-        // completes, so no register state escapes.
-        unsafe {
-            core::arch::asm!("csrr t0, sstatus", out("t0") _);
+            core::arch::asm!(
+                "li t0, {addr}",
+                "ld t1, 0(t0)",
+                addr = const KERNEL_PROBE_ADDR,
+                out("t0") _,
+                out("t1") _,
+            );
         }
         // Unreachable: the fault above terminates the task.
         loop {
@@ -77,23 +82,20 @@ mod run {
     /// Kernel continuation after the user task terminates (fault
     /// containment redirect target, docs/10_USER_MODE.md §4).
     extern "C" fn user_demo_done() -> ! {
-        uart::put_str("USER demo=first_user_task result=contained kernel=survived\n");
+        uart::put_str("USER demo=memory_isolation result=contained kernel=survived\n");
         uart::put_str("phase=user-demo-complete\n");
         loop {
             core::hint::spin_loop();
         }
     }
 
-    /// Enter the first user task (AXIOM-USER-002).
-    ///
-    /// Also validates the v0.1 *virtual* layout spec of the first user
-    /// task through the UserImage model (AXIOM-USER-001). Pre-MMU, the
-    /// physical execution addresses differ from that virtual plan; the
-    /// model check documents and pins the target layout.
+    /// Enter the demo user task under a hardware-enforced user address
+    /// space (AXIOM-MEMHW-005/006/007).
     pub fn first_user_task_demo() -> ! {
+        // Pin the user virtual layout through the UserImage model.
         let spec = UserImage::new(
             VirtAddr::new(0x1_0000),
-            VirtAddr::new(0x20_0000),
+            VirtAddr::new(0x20_0000 + PAGE_SIZE),
             PAGE_SIZE,
             AddressSpaceId(1),
         );
@@ -104,32 +106,29 @@ mod run {
             }
         }
 
-        // Where a faulting/terminated user task returns the kernel to:
-        // __stack_top is the linker-script boot stack top
-        // (kernel/linker.ld). The suspended kernel_main frame below it
-        // is intentionally abandoned — the continuation never returns.
-        // (addr_of! creates raw pointers without dereferencing: safe.)
+        // Kernel continuation for the contained fault.
         let cont_sp = core::ptr::addr_of!(__stack_top) as u64;
         trap::set_user_fault_continuation(user_demo_done as *const () as u64, cont_sp);
 
-        // Static stack addresses are taken once, before user mode
-        // starts, and stay valid forever (statics never move). Tops
-        // point one-past-the-end, 16-byte aligned per repr(align).
-        let trap_stack_top = core::ptr::addr_of!(USER_TRAP_STACK) as u64 + 8 * 1024;
-        let user_stack_top = core::ptr::addr_of!(DEMO_USER_STACK) as u64 + 4 * 1024;
+        // Physical addresses of the task's code and stack frames.
+        let code_phys = demo_user_task as *const () as u64;
+        let stack_phys = core::ptr::addr_of!(DEMO_USER_STACK) as u64;
 
-        uart::put_str("USER enter=demo_task mode=U isolation=privilege\n");
-        // SAFETY: __enter_user performs the architecturally defined
-        // S→U transition (sscratch := trap stack, sepc := entry,
-        // SPP := 0, sret) with a valid entry point and stacks
-        // established above; it never returns and every re-entry goes
-        // through __trap_vector (docs/10_USER_MODE.md §3).
-        unsafe {
-            __enter_user(
-                demo_user_task as *const () as u64,
-                user_stack_top,
-                trap_stack_top,
-            )
-        }
+        // Build the user address space (kernel maps U=0 for the trap
+        // handler + user code/stack U=1) and switch to it.
+        let uas = paging_hw::build_demo_user_address_space(code_phys, stack_phys);
+        // SAFETY: uas.root is a freshly built Sv39 root that maps the
+        // kernel regions (U=0) identity, so this code and its stack stay
+        // valid across the satp switch (docs/12_MMU_SV39.md §5/§7).
+        unsafe { paging_hw::switch_to_user_space(uas.root) };
+
+        let trap_stack_top = core::ptr::addr_of!(USER_TRAP_STACK) as u64 + 8 * 1024;
+
+        uart::put_str("USER enter=demo_task mode=U isolation=memory\n");
+        // SAFETY: __enter_user performs the architecturally defined S→U
+        // transition with a valid user entry VA and user stack VA mapped
+        // in the active user table; it never returns and every re-entry
+        // goes through __trap_vector (docs/10_USER_MODE.md §3).
+        unsafe { __enter_user(uas.entry_va, uas.stack_top_va, trap_stack_top) }
     }
 }
