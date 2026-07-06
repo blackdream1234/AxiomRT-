@@ -1,0 +1,21 @@
+MMU status=enabled mode=sv39 scope=kernel
+TASK_STARTED task=supervisor_task
+TASK_STARTED task=logger_task
+TASK_STARTED task=faulty_task
+IPC recv task=supervisor_task
+IPC endpoint=log op=recv state=blocked
+SCHED selected=logger_task
+IPC recv task=logger_task
+IPC endpoint=log op=recv state=blocked
+SCHED selected=faulty_task
+TIMER tick=1
+TIMER tick=2
+TIMER tick=3
+FAULT type=WatchdogTimeout task=faulty_task
+CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive
+IPC delivered fault_event to=supervisor_task from=faulty_task
+LOGGER event=TASK_FAULTED task=faulty_task
+SCHED selected=supervisor_task
+IPC delivered bytes=1
+SUPERVISOR decision=Kill by=supervisor_task
+RECOVERY_APPLIED policy=Kill

@@ -1,0 +1,8 @@
+ok: TASK_STARTED task=supervisor_task
+ok: TASK_STARTED task=logger_task
+ok: FAULT type=WatchdogTimeout task=faulty_task
+ok: IPC delivered fault_event to=supervisor_task
+ok: LOGGER event=TASK_FAULTED task=faulty_task
+ok: RECOVERY_APPLIED policy=Kill
+ok: no PANIC
+PASS: supervisor test
