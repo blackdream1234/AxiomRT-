@@ -37,6 +37,7 @@ done
 
 # Host test suites.
 run "kernel host tests" cargo test --target x86_64-unknown-linux-gnu -p kernel
+run "axiomctl host tests" cargo test --target x86_64-unknown-linux-gnu -p axiomctl
 run "supervisor host tests" \
     cargo test --manifest-path userland/supervisor/Cargo.toml \
     --target x86_64-unknown-linux-gnu

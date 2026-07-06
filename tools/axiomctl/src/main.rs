@@ -7,6 +7,8 @@
 //! cargo commands; never re-implements a verification step. std only,
 //! zero external dependencies.
 
+mod events;
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -28,6 +30,10 @@ COMMANDS:
     evidence list    list archived evidence versions
     evidence open <ver> [file]
                      list one evidence directory / print one file
+    events parse <logfile>
+                     parse a serial log into NDJSON events (docs/21)
+    events summary <logfile>
+                     per-category event counts for a serial log
     kit build        assemble the industrial evaluation kit under release/
     release check    release hygiene checklist
     version          print axiomctl and repository versions
@@ -52,6 +58,8 @@ fn main() -> ExitCode {
         ["verify"] => cmd_verify(),
         ["evidence", "list"] => cmd_evidence_list(),
         ["evidence", "open", rest @ ..] => cmd_evidence_open(rest),
+        ["events", "parse", file] => cmd_events(file, false),
+        ["events", "summary", file] => cmd_events(file, true),
         ["kit", "build"] => cmd_kit_build(),
         ["release", "check"] => cmd_release_check(),
         other => {
@@ -362,6 +370,37 @@ fn cmd_evidence_open(rest: &[&str]) -> ExitCode {
             }
             println!("print one with: axiomctl evidence open {version} <file>");
             ExitCode::SUCCESS
+        }
+    }
+}
+
+fn cmd_events(file: &str, want_summary: bool) -> ExitCode {
+    let text = match std::fs::read_to_string(file) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("axiomctl: cannot read {file}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let log = events::parse_log(&text);
+    // NDJSON is meant to be piped (head, jq); a closed consumer is a
+    // normal way to stop, not a panic.
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let result = if want_summary {
+        write!(out, "{}", events::summary(&log))
+    } else {
+        log.events
+            .iter()
+            .try_for_each(|ev| writeln!(out, "{}", events::to_json(ev)))
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("axiomctl: write failed: {e}");
+            ExitCode::FAILURE
         }
     }
 }
