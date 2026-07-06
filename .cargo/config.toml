@@ -15,3 +15,4 @@ rustflags = ["-C", "link-arg=-Tkernel/linker.ld"]
 # bare-metal riscv64. Non-x86_64 hosts: use the explicit --target form.
 [alias]
 axiomctl = "run --quiet --target x86_64-unknown-linux-gnu -p axiomctl --"
+studio = "run --quiet --target x86_64-unknown-linux-gnu -p studio --"
