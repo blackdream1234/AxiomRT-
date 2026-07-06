@@ -48,7 +48,15 @@ impl TrapFrame {
 const CAUSE_ILLEGAL_INSTRUCTION: u64 = 2;
 const CAUSE_ECALL_FROM_U: u64 = 8;
 const CAUSE_ECALL_FROM_S: u64 = 9;
+const CAUSE_INSTRUCTION_PAGE_FAULT: u64 = 12;
+const CAUSE_LOAD_PAGE_FAULT: u64 = 13;
+const CAUSE_STORE_PAGE_FAULT: u64 = 15;
 const INTERRUPT_BIT: u64 = 1 << 63;
+
+/// Kernel virtual range (identity-mapped), for classifying whether a
+/// user page fault targeted kernel memory vs. an unmapped user address
+/// (docs/12_MMU_SV39.md §6). Matches kernel/linker.ld KERNEL_BASE.
+const KERNEL_BASE: u64 = 0x8020_0000;
 
 // ---------------------------------------------------------------------
 // User fault containment (AXIOM-USER-002, docs/10_USER_MODE.md §4).
@@ -202,8 +210,25 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
             halt();
         }
 
-        // Any other exception from user mode (page fault, access
-        // fault, misaligned access, ...) is a user fault: contained,
+        // AXIOM-MEMHW-008: Sv39 page faults (instruction/load/store).
+        // From user mode these are contained exactly like other user
+        // faults (docs/12_MMU_SV39.md §6): structured page-fault report,
+        // task terminated, kernel survives. The reason distinguishes a
+        // user access to kernel memory from an unmapped user address.
+        // A page fault taken in kernel mode is a KernelInvariantViolation.
+        CAUSE_INSTRUCTION_PAGE_FAULT | CAUSE_LOAD_PAGE_FAULT | CAUSE_STORE_PAGE_FAULT => {
+            report("page-fault", scause, frame);
+            if frame.from_user() {
+                let reason = page_fault_reason(scause, read_stval());
+                if contain_user_fault(frame, reason) {
+                    return;
+                }
+            }
+            uart::put_str("PANIC kernel=axiomrt reason=kernel_page_fault phase=trap\n");
+            halt();
+        }
+
+        // Any other exception from user mode is a user fault: contained,
         // task terminated, kernel survives (AXIOM-USER-002).
         // From kernel mode: controlled panic (AXIOM-TRAP-001).
         _ => {
@@ -214,5 +239,17 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
             uart::put_str("PANIC kernel=axiomrt reason=unknown_trap phase=trap\n");
             halt();
         }
+    }
+}
+
+/// Classify a user page fault for the containment report
+/// (docs/12_MMU_SV39.md §6).
+fn page_fault_reason(scause: u64, fault_addr: u64) -> &'static str {
+    if fault_addr >= KERNEL_BASE {
+        "user_access_kernel_memory"
+    } else if scause == CAUSE_INSTRUCTION_PAGE_FAULT {
+        "user_execute_nonexecutable"
+    } else {
+        "user_access_unmapped"
     }
 }
