@@ -34,7 +34,7 @@ const UART_PAGE: u64 = 0x1000_0000;
 static mut KERNEL_TABLES: [Table; ARENA_TABLES] = [Table::zeroed(); ARENA_TABLES];
 
 /// Maximum concurrent user address spaces on target (v0.3).
-pub const MAX_USER_AS: usize = 4;
+pub const MAX_USER_AS: usize = 8;
 
 /// Static user table arenas, one per user address space.
 static mut USER_TABLES: [[Table; ARENA_TABLES]; MAX_USER_AS] =
@@ -211,6 +211,113 @@ pub fn build_user_address_space(
         root: arena.root_pa(),
         entry_va: USER_CODE_VA + (code_phys & 0xfff),
         stack_top_va: USER_STACK_VA + USER_STACK_PAGES * 0x1000,
+    }
+}
+
+extern "C" {
+    static __user_text_start: u8;
+    static __user_text_end: u8;
+    static __user_rodata_start: u8;
+    static __user_rodata_end: u8;
+}
+
+/// Virtual span `[USER_CODE_VA, end)` the mapped user region occupies in
+/// every service address space (docs/25_OS_BOOT_FLOW.md §2). Used by the
+/// syscall layer to validate read-only user buffers that point at
+/// sectioned rodata.
+pub fn user_region_va_span() -> (u64, u64) {
+    // Linker-provided section boundary symbols; address-of only.
+    let (start, end) = (
+        core::ptr::addr_of!(__user_text_start) as u64,
+        core::ptr::addr_of!(__user_rodata_end) as u64,
+    );
+    (USER_CODE_VA, USER_CODE_VA + (end - start))
+}
+
+/// Build a service address space (AXIOM-INIT-002, docs/25 §2): the whole
+/// linker-gathered user region mapped contiguously at USER_CODE_VA
+/// (text pages U+R+X, rodata pages U+R — W^X preserved) plus a private
+/// U+R+W stack page. RISC-V medany code is pc-relative, so intra-region
+/// calls and static references work at the mapped address; anything that
+/// escapes the region page-faults and is contained.
+///
+/// `entry_kernel_va` is the link-time address of the sectioned entry
+/// function; `stack_phys` the physical base of the service's stack page.
+pub fn build_service_address_space(
+    as_index: usize,
+    entry_kernel_va: u64,
+    stack_phys: u64,
+) -> UserAddressSpace {
+    assert!(as_index < MAX_USER_AS, "user AS index out of range");
+    let r = kernel_regions();
+    // SAFETY: as in build_user_address_space — disjoint per-index arena,
+    // single hart.
+    let all: &mut [[Table; ARENA_TABLES]; MAX_USER_AS] =
+        unsafe { &mut *core::ptr::addr_of_mut!(USER_TABLES) };
+    let base_pa = core::ptr::addr_of!(all[as_index]) as u64;
+    let tables: &mut [Table] = &mut all[as_index];
+    let mut arena = Arena::new(tables, base_pa);
+
+    map_kernel_regions(&mut arena, &r);
+
+    // Linker section symbols; address-of only.
+    let (text_start, text_end, ro_start, ro_end) = (
+        core::ptr::addr_of!(__user_text_start) as u64,
+        core::ptr::addr_of!(__user_text_end) as u64,
+        core::ptr::addr_of!(__user_rodata_start) as u64,
+        core::ptr::addr_of!(__user_rodata_end) as u64,
+    );
+
+    let urx = Permissions {
+        read: true,
+        write: false,
+        execute: true,
+        user: true,
+        device: false,
+    };
+    let uro = Permissions {
+        read: true,
+        write: false,
+        execute: false,
+        user: true,
+        device: false,
+    };
+    let mut pa = text_start;
+    while pa < text_end {
+        arena
+            .map_page(
+                VirtAddr::new(USER_CODE_VA + (pa - text_start)),
+                PhysAddr::new(pa),
+                urx,
+            )
+            .expect("map user region text");
+        pa += 0x1000;
+    }
+    let mut pa = ro_start;
+    while pa < ro_end {
+        arena
+            .map_page(
+                VirtAddr::new(USER_CODE_VA + (pa - text_start)),
+                PhysAddr::new(pa),
+                uro,
+            )
+            .expect("map user region rodata");
+        pa += 0x1000;
+    }
+
+    let urw = Permissions::user_rw();
+    arena
+        .map_page(
+            VirtAddr::new(USER_STACK_VA),
+            PhysAddr::new(stack_phys & !0xfff),
+            urw,
+        )
+        .expect("map service stack");
+
+    UserAddressSpace {
+        root: arena.root_pa(),
+        entry_va: USER_CODE_VA + (entry_kernel_va - text_start),
+        stack_top_va: USER_STACK_VA + 0x1000,
     }
 }
 

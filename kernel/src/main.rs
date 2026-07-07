@@ -88,6 +88,12 @@ mod supervisor_demo;
 #[path = "arch/riscv64/demo_full.rs"]
 mod demo_full;
 
+// Real OS boot flow: init/console/shell services (feature-gated,
+// AXIOM-INIT/AXIOM-SHELL, docs/25_OS_BOOT_FLOW.md).
+#[cfg(all(target_arch = "riscv64", feature = "os_boot"))]
+#[path = "arch/riscv64/os_boot.rs"]
+mod os_boot;
+
 // User task layer (Phase 7). The image model is target-independent and
 // unit-tested on the host. Transitional allowance: the model is
 // consumed on target by the user-mode transition (AXIOM-USER-002).
@@ -120,18 +126,27 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     // cooperative dispatch (v0.3), or the v0.2 single-task
     // memory-isolation demo by default. At most one demo_* feature is
     // expected to be set at a time.
-    #[cfg(feature = "demo_full")]
+    #[cfg(feature = "os_boot")]
+    {
+        os_boot::os_boot()
+    }
+    #[cfg(all(feature = "demo_full", not(feature = "os_boot")))]
     {
         demo_full::demo_full()
     }
-    #[cfg(all(feature = "demo_supervisor", not(feature = "demo_full")))]
+    #[cfg(all(
+        feature = "demo_supervisor",
+        not(feature = "demo_full"),
+        not(feature = "os_boot")
+    ))]
     {
         supervisor_demo::supervisor_demo()
     }
     #[cfg(all(
         feature = "demo_cap",
         not(feature = "demo_supervisor"),
-        not(feature = "demo_full")
+        not(feature = "demo_full"),
+        not(feature = "os_boot")
     ))]
     {
         cap_demo::cap_demo()
@@ -139,7 +154,8 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     #[cfg(all(
         feature = "demo_ipc",
         not(feature = "demo_cap"),
-        not(feature = "demo_supervisor")
+        not(feature = "demo_supervisor"),
+        not(feature = "os_boot")
     ))]
     {
         ipc_demo::ipc_demo()
@@ -147,7 +163,8 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     #[cfg(all(
         feature = "demo_watchdog",
         not(feature = "demo_ipc"),
-        not(feature = "demo_cap")
+        not(feature = "demo_cap"),
+        not(feature = "os_boot")
     ))]
     {
         watchdog_demo::watchdog_demo()
@@ -156,7 +173,8 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
         feature = "demo_preempt",
         not(feature = "demo_watchdog"),
         not(feature = "demo_ipc"),
-        not(feature = "demo_cap")
+        not(feature = "demo_cap"),
+        not(feature = "os_boot")
     ))]
     {
         preempt::preempt_demo()
@@ -166,7 +184,8 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
         not(feature = "demo_preempt"),
         not(feature = "demo_watchdog"),
         not(feature = "demo_ipc"),
-        not(feature = "demo_cap")
+        not(feature = "demo_cap"),
+        not(feature = "os_boot")
     ))]
     {
         multitask::multitask_demo()
@@ -178,7 +197,8 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
         feature = "demo_ipc",
         feature = "demo_cap",
         feature = "demo_supervisor",
-        feature = "demo_full"
+        feature = "demo_full",
+        feature = "os_boot"
     )))]
     {
         user::first_user_task_demo()

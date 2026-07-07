@@ -28,6 +28,14 @@ const SYS_EXIT: u64 = 2;
 const SYS_SEND: u64 = 3;
 const SYS_RECV: u64 = 4;
 const SYS_FAULT_ACK: u64 = 7;
+// Real OS syscalls (docs/25_OS_BOOT_FLOW.md §4).
+const SYS_TASK_START: u64 = 8;
+const SYS_CON_WRITE: u64 = 9;
+const SYS_CON_READ: u64 = 10;
+const SYS_INFO: u64 = 11;
+const SYS_TASK_KILL: u64 = 12;
+const SYS_TASK_RESTART: u64 = 13;
+const SYS_SHUTDOWN: u64 = 14;
 
 // Result codes returned in a0 (docs/04_SYSCALL_MODEL.md).
 const ERR_INVALID_CAP: i64 = -2;
@@ -35,23 +43,73 @@ const ERR_INSUFFICIENT_RIGHTS: i64 = -3;
 const ERR_WRONG_OBJECT_TYPE: i64 = -4;
 const ERR_INVALID_ARG: i64 = -5;
 const ERR_MSG_TOO_LARGE: i64 = -6;
+const ERR_NO_SLOT: i64 = -7;
 
 // On-target capabilities (AXIOM-CAPRT). Rights bits match the host
 // model (docs/06_CAPABILITY_MODEL.md §2).
 const OTYPE_ENDPOINT: u8 = 0;
+/// Console byte mechanism (docs/25 §4): Send = write, Recv = read.
+const OTYPE_CONSOLE: u8 = 1;
+/// Task-control authority (start/kill/restart/shutdown).
+const OTYPE_CONTROL: u8 = 2;
+/// Read-only introspection (sys_info).
+const OTYPE_INFO: u8 = 3;
 const RIGHT_SEND: u16 = 1 << 3;
 const RIGHT_RECV: u16 = 1 << 4;
+const RIGHT_CONTROL: u16 = 1 << 7;
 /// Capability slots per task (small, static).
 const CAPS_PER_TASK: usize = 4;
 
 /// On-target capability: (object type, object id, rights). The running
 /// form of the host `Capability` (docs/06 §3).
 #[derive(Clone, Copy)]
-struct Cap {
+pub struct Cap {
     otype: u8,
     object_id: u32,
     rights: u16,
 }
+
+/// Boot-time capability constructors for the service table
+/// (docs/25 §5). Deny-by-default: a service has exactly what its table
+/// entry mints, nothing else.
+#[allow(dead_code)] // os_boot-only API
+pub const fn cap_endpoint(object_id: u32, rights: u16) -> Cap {
+    Cap {
+        otype: OTYPE_ENDPOINT,
+        object_id,
+        rights,
+    }
+}
+#[allow(dead_code)] // os_boot-only API
+pub const fn cap_console(rights: u16) -> Cap {
+    Cap {
+        otype: OTYPE_CONSOLE,
+        object_id: 0,
+        rights,
+    }
+}
+#[allow(dead_code)] // os_boot-only API
+pub const fn cap_control() -> Cap {
+    Cap {
+        otype: OTYPE_CONTROL,
+        object_id: 0,
+        rights: RIGHT_CONTROL,
+    }
+}
+#[allow(dead_code)] // os_boot-only API
+pub const fn cap_info() -> Cap {
+    Cap {
+        otype: OTYPE_INFO,
+        object_id: 0,
+        rights: RIGHT_RECV,
+    }
+}
+#[allow(dead_code)] // os_boot-only API
+pub const CAP_RIGHT_SEND: u16 = RIGHT_SEND;
+#[allow(dead_code)] // os_boot-only API
+pub const CAP_RIGHT_RECV: u16 = RIGHT_RECV;
+#[allow(dead_code)] // os_boot-only API
+pub const CAP_RIGHT_CONTROL: u16 = RIGHT_CONTROL;
 
 /// Outcome of a capability lookup (fixed check order, docs/06 §4).
 /// On success carries the resolved endpoint id.
@@ -104,6 +162,10 @@ struct Tcb {
     /// code holds only an index into it.
     caps: [Option<Cap>; CAPS_PER_TASK],
     name: &'static str,
+    /// Initial user context, kept so sys_task_restart can rebuild the
+    /// frame (docs/25 §4).
+    entry_va: u64,
+    stack_top_va: u64,
 }
 
 const EMPTY_TCB: Tcb = Tcb {
@@ -118,10 +180,12 @@ const EMPTY_TCB: Tcb = Tcb {
     pending_ipc: None,
     caps: [None; CAPS_PER_TASK],
     name: "",
+    entry_va: 0,
+    stack_top_va: 0,
 };
 
-/// Maximum on-target tasks (v0.3).
-pub const MAX_TASKS: usize = 4;
+/// Maximum on-target tasks (8 since the OS boot flow, docs/25 §3).
+pub const MAX_TASKS: usize = 8;
 
 static mut TASKS: [Tcb; MAX_TASKS] = [EMPTY_TCB; MAX_TASKS];
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
@@ -194,6 +258,8 @@ pub unsafe fn register_task(
         pending_ipc: None,
         caps: [None; CAPS_PER_TASK],
         name,
+        entry_va,
+        stack_top_va: sp_va,
     };
     // SAFETY: exclusive boot-time access to a distinct slot.
     unsafe {
@@ -218,6 +284,16 @@ pub unsafe fn set_endpoint_cap(idx: usize, slot: usize, object_id: u32, rights: 
     });
 }
 
+/// Mint a non-endpoint capability into task `idx`'s slot 0 (boot-time;
+/// used for init_service's task-control authority, docs/25 §5).
+///
+/// # Safety
+/// Called at boot before dispatching, single hart.
+#[allow(dead_code)]
+pub unsafe fn set_boot_cap(idx: usize, cap: Cap) {
+    tasks_mut()[idx].caps[0] = Some(cap);
+}
+
 /// Resolve `cap_index` in task `cur`'s table for an endpoint capability
 /// with the `required` right, in the fixed order of docs/06 §4. On
 /// success returns the endpoint id the capability names.
@@ -236,9 +312,10 @@ fn cap_check(cur: usize, cap_index: usize, required: u16) -> CapCheck {
 
 /// Map a failed capability check to a syscall error code and emit the
 /// CAP_DENIED evidence (docs/18 §3). The endpoint is never touched.
-fn deny_cap(cur_name: &str, check: CapCheck) -> i64 {
+fn deny_cap(cur: usize, check: CapCheck) -> i64 {
+    ring_push(EV_CAP_DENIED, cur);
     uart::put_str("CAP_DENIED task=");
-    uart::put_str(cur_name);
+    uart::put_str(tasks_mut()[cur].name);
     uart::put_str(" reason=no_valid_capability\n");
     uart::put_str("IPC state=unchanged\n");
     match check {
@@ -375,6 +452,7 @@ fn resume_task(next: usize, frame: &mut TrapFrame) {
     unsafe { paging_hw::switch_to_user_space(root) };
     *frame = tasks[next].frame;
     if let Some(pm) = tasks[next].pending_ipc.take() {
+        DELIVERED.fetch_add(1, Ordering::SeqCst);
         copy_bytes_to_user(pm.dst, &pm.data[..pm.len]);
         frame.set_a0(pm.len as i64);
         uart::put_str("IPC delivered bytes=");
@@ -434,6 +512,34 @@ pub fn on_syscall(num: u64, frame: &mut TrapFrame) -> bool {
             fault_ack(frame);
             true
         }
+        SYS_TASK_START => {
+            sys_task_start(frame);
+            true
+        }
+        SYS_CON_WRITE => {
+            sys_con_write(frame);
+            true
+        }
+        SYS_CON_READ => {
+            sys_con_read(frame);
+            true
+        }
+        SYS_INFO => {
+            sys_info(frame);
+            true
+        }
+        SYS_TASK_KILL => {
+            sys_task_kill(frame);
+            true
+        }
+        SYS_TASK_RESTART => {
+            sys_task_restart(frame);
+            true
+        }
+        SYS_SHUTDOWN => {
+            sys_shutdown(frame);
+            true
+        }
         _ => false,
     }
 }
@@ -443,19 +549,29 @@ fn switch(frame: &mut TrapFrame, exiting: bool) {
     let cur = CURRENT.load(Ordering::SeqCst);
     let tasks = tasks_mut();
 
+    // The OS boot flow's console service yields between input polls; a
+    // yield that re-selects the same task is pure noise there, so it
+    // stays silent. Demo builds keep the full trace their tests assert.
+    let quiet = cfg!(feature = "os_boot") && !exiting;
+
     if exiting {
         emit("SYSCALL name=sys_exit task=", tasks[cur].name);
         tasks[cur].state = RtState::Killed;
         emit("TASK_EXITED task=", tasks[cur].name);
+        ring_push(EV_EXITED, cur);
     } else {
-        emit("SYSCALL name=sys_yield task=", tasks[cur].name);
         tasks[cur].frame = *frame;
         tasks[cur].state = RtState::Ready;
     }
 
     match select_highest(cur) {
         Some(next) => {
-            emit("SCHED selected=", tasks[next].name);
+            if !(quiet && next == cur) {
+                if !exiting {
+                    emit("SYSCALL name=sys_yield task=", tasks[cur].name);
+                }
+                emit("SCHED selected=", tasks[next].name);
+            }
             resume_task(next, frame);
         }
         None => idle_halt(),
@@ -520,17 +636,54 @@ pub fn watchdog_tick(frame: &mut TrapFrame) -> bool {
     if !ACTIVE.load(Ordering::SeqCst) {
         return false;
     }
+    TICKS.fetch_add(1, Ordering::SeqCst);
     let misses = WATCHDOG_MISS.fetch_add(1, Ordering::SeqCst) + 1;
     if misses <= WATCHDOG_WINDOW {
         return false;
     }
     let cur = CURRENT.load(Ordering::SeqCst);
     let cur_name = tasks_mut()[cur].name;
+    ring_push(EV_FAULT, cur);
     emit("FAULT type=WatchdogTimeout task=", cur_name);
     uart::put_str("CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive\n");
     tasks_mut()[cur].state = RtState::Faulted;
     // Notify the supervisor (fault channel) and logger (event channel)
     // if they are waiting (AXIOM-SUPRT-005/008).
+    notify_supervisor_and_logger(cur_name);
+    match select_highest(cur) {
+        Some(next) => {
+            emit("SCHED selected=", tasks_mut()[next].name);
+            resume_task(next, frame);
+        }
+        None => {
+            uart::put_str("SCHED idle=no_ready_task\n");
+            uart::put_str("KERNEL alive=true\n");
+            loop {
+                core::hint::spin_loop();
+            }
+        }
+    }
+    true
+}
+
+/// Contain a synchronous user fault (page fault, illegal instruction)
+/// for the running task while the dispatcher is active: the task is
+/// Faulted, the supervisor and logger are notified over their fault/
+/// event channels, and the next ready task runs (docs/26 §3). Returns
+/// false when the dispatcher is not active (single-task demos use the
+/// v0.2 continuation path instead).
+pub fn contain_fault(frame: &mut TrapFrame, reason: &str) -> bool {
+    if !ACTIVE.load(Ordering::SeqCst) {
+        return false;
+    }
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let cur_name = tasks_mut()[cur].name;
+    ring_push(EV_FAULT, cur);
+    emit("FAULT type=PageFault task=", cur_name);
+    uart::put_str("CONTAIN scope=user reason=");
+    uart::put_str(reason);
+    uart::put_str(" action=faulted kernel=alive\n");
+    tasks_mut()[cur].state = RtState::Faulted;
     notify_supervisor_and_logger(cur_name);
     match select_highest(cur) {
         Some(next) => {
@@ -564,7 +717,7 @@ fn ipc_send(frame: &mut TrapFrame) {
     let ep_id = match cap_check(cur, cap_index, RIGHT_SEND) {
         CapCheck::Ok(id) => id,
         other => {
-            frame.set_a0(deny_cap(cur_name, other));
+            frame.set_a0(deny_cap(cur, other));
             return;
         }
     };
@@ -630,7 +783,7 @@ fn ipc_recv(frame: &mut TrapFrame) {
     let ep_id = match cap_check(cur, cap_index, RIGHT_RECV) {
         CapCheck::Ok(id) => id,
         other => {
-            frame.set_a0(deny_cap(cur_name, other));
+            frame.set_a0(deny_cap(cur, other));
             return;
         }
     };
@@ -744,5 +897,460 @@ fn fault_ack(frame: &mut TrapFrame) {
     uart::put_str("RECOVERY_APPLIED policy=");
     uart::put_str(policy);
     uart::put_str("\n");
+    ring_push(EV_RECOVERY, cur);
     frame.set_a0(0); // OK
+}
+
+// ---- Real OS layer: service table, introspection, console, control ------
+// (AXIOM-INIT-002..005, AXIOM-SHELL-002..009; docs/25_OS_BOOT_FLOW.md,
+// docs/26_SHELL.md.)
+
+/// Uptime in timer ticks (incremented by watchdog_tick on every tick).
+static TICKS: AtomicU64 = AtomicU64::new(0);
+/// Deferred IPC deliveries completed (evidence counter for sys_info).
+static DELIVERED: AtomicU64 = AtomicU64::new(0);
+
+// Kernel event ring (docs/25 §4, `events`/`faults` shell commands).
+const EV_STARTED: u8 = 0;
+const EV_EXITED: u8 = 1;
+const EV_FAULT: u8 = 2;
+const EV_CAP_DENIED: u8 = 3;
+const EV_RECOVERY: u8 = 4;
+const EV_KILLED: u8 = 5;
+const EV_RESTARTED: u8 = 6;
+const RING_LEN: usize = 32;
+static mut RING: [(u8, u8); RING_LEN] = [(0, 0); RING_LEN];
+static RING_HEAD: AtomicUsize = AtomicUsize::new(0);
+
+fn ring_push(kind: u8, slot: usize) {
+    let head = RING_HEAD.fetch_add(1, Ordering::SeqCst);
+    // SAFETY: single-hart, non-reentrant dispatcher state.
+    unsafe { (*addr_of_mut!(RING))[head % RING_LEN] = (kind, slot as u8) };
+}
+
+fn ev_name(kind: u8) -> &'static str {
+    match kind {
+        EV_STARTED => "task_started",
+        EV_EXITED => "task_exited",
+        EV_FAULT => "fault",
+        EV_CAP_DENIED => "cap_denied",
+        EV_RECOVERY => "recovery_applied",
+        EV_KILLED => "task_killed",
+        EV_RESTARTED => "task_restarted",
+        _ => "unknown",
+    }
+}
+
+fn state_name(s: RtState) -> &'static str {
+    match s {
+        RtState::Empty => "empty",
+        RtState::Ready => "ready",
+        RtState::Running => "running",
+        RtState::Blocked => "blocked",
+        RtState::Faulted => "faulted",
+        RtState::Killed => "killed",
+    }
+}
+
+/// One entry of the boot-frozen service table (docs/25 §3). The kernel
+/// holds the mechanism; init_service owns the start order (policy).
+pub struct ServiceDef {
+    pub name: &'static str,
+    /// Link-time kernel VA of the sectioned entry function.
+    pub entry: u64,
+    /// Physical base of the service's private stack page.
+    pub stack_phys: u64,
+    pub prio: u8,
+    /// TCB slot == address-space index.
+    pub slot: usize,
+    pub caps: [Option<Cap>; CAPS_PER_TASK],
+}
+
+static mut SERVICE_TABLE: Option<&'static [ServiceDef]> = None;
+
+/// Install the service table (boot-time, before dispatching).
+///
+/// # Safety
+/// Boot-time only, single hart, called once.
+#[allow(dead_code)] // os_boot-only API
+pub unsafe fn set_service_table(table: &'static [ServiceDef]) {
+    // SAFETY: exclusive boot-time access.
+    unsafe { *addr_of_mut!(SERVICE_TABLE) = Some(table) };
+}
+
+fn service_table() -> Option<&'static [ServiceDef]> {
+    // SAFETY: written once at boot, read-only afterwards.
+    unsafe { *addr_of!(SERVICE_TABLE) }
+}
+
+/// True if the caller holds a capability of `otype` with `required`
+/// rights (deny-by-default search over its table; docs/25 §4 syscalls
+/// carry no capability index — authority is a property of the task).
+fn cap_find(cur: usize, otype: u8, required: u16) -> bool {
+    tasks_mut()[cur]
+        .caps
+        .iter()
+        .any(|c| matches!(c, Some(c) if c.otype == otype && c.rights & required == required))
+}
+
+fn deny_authority(cur: usize, what: &str) -> i64 {
+    ring_push(EV_CAP_DENIED, cur);
+    uart::put_str("CAP_DENIED task=");
+    uart::put_str(tasks_mut()[cur].name);
+    uart::put_str(" reason=");
+    uart::put_str(what);
+    uart::put_str("\n");
+    ERR_INVALID_CAP
+}
+
+fn in_stack_window(va: u64, len: usize) -> bool {
+    va >= USER_DATA_VA
+        && va
+            .checked_add(len as u64)
+            .is_some_and(|end| end <= USER_DATA_END)
+}
+
+/// Read-only user source ranges for sys_con_write: the caller's stack
+/// page or the mapped user region (sectioned rodata lives there).
+fn in_readable_window(va: u64, len: usize) -> bool {
+    if in_stack_window(va, len) {
+        return true;
+    }
+    let (start, end) = paging_hw::user_region_va_span();
+    va >= start && va.checked_add(len as u64).is_some_and(|e| e <= end)
+}
+
+/// Start service `index` from the table: build its address space,
+/// register the TCB, mint its capabilities (AXIOM-INIT-002).
+fn start_service(index: usize) -> i64 {
+    let Some(table) = service_table() else {
+        return ERR_INVALID_ARG;
+    };
+    let Some(def) = table.get(index) else {
+        return ERR_INVALID_ARG;
+    };
+    if tasks_mut()[def.slot].state != RtState::Empty {
+        return ERR_NO_SLOT;
+    }
+    let uas = paging_hw::build_service_address_space(def.slot, def.entry, def.stack_phys);
+    // SAFETY: single hart; the slot was Empty, so no live task uses it.
+    unsafe {
+        register_task(
+            def.slot,
+            def.name,
+            def.prio,
+            uas.root,
+            uas.entry_va,
+            uas.stack_top_va,
+        );
+    }
+    tasks_mut()[def.slot].caps = def.caps;
+    ring_push(EV_STARTED, def.slot);
+    emit("SERVICE started=", def.name);
+    def.slot as i64
+}
+
+fn sys_task_start(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    if !cap_find(cur, OTYPE_CONTROL, RIGHT_CONTROL) {
+        frame.set_a0(deny_authority(cur, "no_control_capability"));
+        return;
+    }
+    let index = frame.regs[9] as usize; // a0
+    frame.set_a0(start_service(index));
+}
+
+fn sys_con_write(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    if !cap_find(cur, OTYPE_CONSOLE, RIGHT_SEND) {
+        frame.set_a0(deny_authority(cur, "no_console_write_capability"));
+        return;
+    }
+    let va = frame.regs[9]; // a0
+    let len = frame.regs[10] as usize; // a1
+    const CON_WRITE_MAX: usize = 256;
+    if len > CON_WRITE_MAX || !in_readable_window(va, len) {
+        frame.set_a0(ERR_INVALID_ARG);
+        return;
+    }
+    set_sum();
+    for i in 0..len {
+        // SAFETY: validated user range, SUM set, byte-wise volatile read.
+        let b = unsafe { read_volatile((va + i as u64) as *const u8) };
+        if b == b'\n' {
+            uart::put_byte(b'\r');
+        }
+        uart::put_byte(b);
+    }
+    clear_sum();
+    frame.set_a0(len as i64);
+}
+
+fn sys_con_read(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    if !cap_find(cur, OTYPE_CONSOLE, RIGHT_RECV) {
+        frame.set_a0(deny_authority(cur, "no_console_read_capability"));
+        return;
+    }
+    let va = frame.regs[9]; // a0
+    let max = (frame.regs[10] as usize).min(IPC_MSG_MAX); // a1
+    if !in_stack_window(va, max) {
+        frame.set_a0(ERR_INVALID_ARG);
+        return;
+    }
+    let mut n = 0usize;
+    set_sum();
+    while n < max {
+        let Some(b) = uart::get_byte() else { break };
+        // SAFETY: validated user range, SUM set, byte-wise volatile write.
+        unsafe { write_volatile((va + n as u64) as *mut u8, b) };
+        n += 1;
+    }
+    clear_sum();
+    frame.set_a0(n as i64);
+}
+
+// ---- sys_info (read-only introspection, docs/25 §4) ---------------------
+
+const INFO_MAX: usize = 768;
+struct InfoBuf {
+    buf: [u8; INFO_MAX],
+    len: usize,
+}
+
+impl InfoBuf {
+    fn new() -> Self {
+        InfoBuf {
+            buf: [0; INFO_MAX],
+            len: 0,
+        }
+    }
+    fn push_byte(&mut self, b: u8) {
+        if self.len < INFO_MAX {
+            self.buf[self.len] = b;
+            self.len += 1;
+        }
+    }
+    fn push_str(&mut self, s: &str) {
+        for b in s.bytes() {
+            self.push_byte(b);
+        }
+    }
+    fn push_dec(&mut self, mut v: u64) {
+        let mut tmp = [0u8; 20];
+        let mut i = tmp.len();
+        if v == 0 {
+            self.push_byte(b'0');
+            return;
+        }
+        while v > 0 {
+            i -= 1;
+            tmp[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+        }
+        for &b in &tmp[i..] {
+            self.push_byte(b);
+        }
+    }
+}
+
+fn info_tasks(out: &mut InfoBuf) {
+    let tasks = tasks_mut();
+    for (i, t) in tasks.iter().enumerate() {
+        if t.state == RtState::Empty {
+            continue;
+        }
+        out.push_str("task idx=");
+        out.push_dec(i as u64);
+        out.push_str(" name=");
+        out.push_str(t.name);
+        out.push_str(" prio=");
+        out.push_dec(t.prio as u64);
+        out.push_str(" state=");
+        out.push_str(state_name(t.state));
+        out.push_str("\n");
+    }
+}
+
+fn info_ring(out: &mut InfoBuf, only_faults: bool) {
+    let head = RING_HEAD.load(Ordering::SeqCst);
+    let count = head.min(RING_LEN);
+    let tasks = tasks_mut();
+    for k in 0..count {
+        let idx = (head - count + k) % RING_LEN;
+        // SAFETY: single-hart dispatcher state, read-only here.
+        let (kind, slot) = unsafe { (*addr_of!(RING))[idx] };
+        if only_faults && kind != EV_FAULT && kind != EV_CAP_DENIED {
+            continue;
+        }
+        out.push_str("evt kind=");
+        out.push_str(ev_name(kind));
+        out.push_str(" task=");
+        let name = tasks[slot as usize].name;
+        out.push_str(if name.is_empty() { "?" } else { name });
+        out.push_str("\n");
+    }
+}
+
+fn info_ipc(out: &mut InfoBuf) {
+    for id in 0..NUM_ENDPOINTS {
+        out.push_str("ep id=");
+        out.push_dec(id as u64);
+        out.push_str(" state=");
+        out.push_str(match ep_get(id as u32) {
+            Ep::Idle => "idle",
+            Ep::SenderWaiting { .. } => "sender_waiting",
+            Ep::ReceiverWaiting { .. } => "receiver_waiting",
+        });
+        out.push_str("\n");
+    }
+    out.push_str("deferred_deliveries=");
+    out.push_dec(DELIVERED.load(Ordering::SeqCst));
+    out.push_str("\n");
+}
+
+fn info_caps(out: &mut InfoBuf) {
+    let tasks = tasks_mut();
+    for t in tasks.iter() {
+        if t.state == RtState::Empty {
+            continue;
+        }
+        out.push_str("caps task=");
+        out.push_str(t.name);
+        for c in t.caps.iter().flatten() {
+            out.push_str(match c.otype {
+                OTYPE_ENDPOINT => " endpoint",
+                OTYPE_CONSOLE => " console",
+                OTYPE_CONTROL => " control",
+                OTYPE_INFO => " info",
+                _ => " ?",
+            });
+        }
+        out.push_str("\n");
+    }
+}
+
+fn info_memory(out: &mut InfoBuf) {
+    out.push_str("mmu=sv39 kernel_pages=U0 wxorx=true\n");
+    out.push_str("kernel_base=0x80200000\n");
+    out.push_str("user_region_va=0x10000\n");
+    out.push_str("user_stack_va=0x200000 stack_pages=1\n");
+}
+
+fn sys_info(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    if !cap_find(cur, OTYPE_INFO, RIGHT_RECV) {
+        frame.set_a0(deny_authority(cur, "no_info_capability"));
+        return;
+    }
+    let kind = frame.regs[9]; // a0
+    let va = frame.regs[10]; // a1
+    let max = frame.regs[11] as usize; // a2
+    if !in_stack_window(va, max.min(INFO_MAX)) {
+        frame.set_a0(ERR_INVALID_ARG);
+        return;
+    }
+    let mut out = InfoBuf::new();
+    match kind {
+        0 => info_tasks(&mut out),
+        1 => info_ring(&mut out, true),
+        2 => info_ipc(&mut out),
+        3 => info_caps(&mut out),
+        4 => info_memory(&mut out),
+        5 => {
+            out.push_str("uptime ticks=");
+            out.push_dec(TICKS.load(Ordering::SeqCst));
+            out.push_str(" tick_interval=100000 timebase_hz=10000000\n");
+        }
+        6 => info_ring(&mut out, false),
+        _ => {
+            frame.set_a0(ERR_INVALID_ARG);
+            return;
+        }
+    }
+    let n = out.len.min(max);
+    copy_bytes_to_user(va, &out.buf[..n]);
+    frame.set_a0(n as i64);
+}
+
+fn sys_task_kill(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    if !cap_find(cur, OTYPE_CONTROL, RIGHT_CONTROL) {
+        frame.set_a0(deny_authority(cur, "no_control_capability"));
+        return;
+    }
+    let slot = frame.regs[9] as usize; // a0
+    let tasks = tasks_mut();
+    if slot >= MAX_TASKS || tasks[slot].state == RtState::Empty {
+        frame.set_a0(ERR_INVALID_ARG);
+        return;
+    }
+    tasks[slot].state = RtState::Killed;
+    tasks[slot].pending_ipc = None;
+    ring_push(EV_KILLED, slot);
+    emit("TASK_KILLED task=", tasks[slot].name);
+    if slot == cur {
+        // Killing yourself schedules away like sys_exit.
+        match select_highest(cur) {
+            Some(next) => {
+                emit("SCHED selected=", tasks_mut()[next].name);
+                resume_task(next, frame);
+            }
+            None => idle_halt(),
+        }
+    } else {
+        frame.set_a0(0);
+    }
+}
+
+fn sys_task_restart(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    if !cap_find(cur, OTYPE_CONTROL, RIGHT_CONTROL) {
+        frame.set_a0(deny_authority(cur, "no_control_capability"));
+        return;
+    }
+    let slot = frame.regs[9] as usize; // a0
+    let tasks = tasks_mut();
+    if slot >= MAX_TASKS
+        || slot == cur
+        || tasks[slot].state == RtState::Empty
+        || tasks[slot].entry_va == 0
+    {
+        frame.set_a0(ERR_INVALID_ARG);
+        return;
+    }
+    const SSTATUS_SPP: u64 = 1 << 8;
+    const SSTATUS_SPIE: u64 = 1 << 5;
+    let mut f = TrapFrame::new_user(tasks[slot].entry_va, tasks[slot].stack_top_va);
+    f.sstatus = (read_sstatus() & !SSTATUS_SPP) | SSTATUS_SPIE;
+    tasks[slot].frame = f;
+    tasks[slot].pending_ipc = None;
+    tasks[slot].state = RtState::Ready;
+    ring_push(EV_RESTARTED, slot);
+    emit("TASK_RESTARTED task=", tasks[slot].name);
+    frame.set_a0(0);
+}
+
+fn sys_shutdown(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    if !cap_find(cur, OTYPE_CONTROL, RIGHT_CONTROL) {
+        frame.set_a0(deny_authority(cur, "no_control_capability"));
+        return;
+    }
+    uart::put_str("SHUTDOWN controlled=true by=");
+    uart::put_str(tasks_mut()[cur].name);
+    uart::put_str("\n");
+    // SBI System Reset (SRST, EID 0x53525354 FID 0): type 0 = shutdown,
+    // reason 0 = no reason.
+    // SAFETY: SBI call; does not return on success.
+    unsafe {
+        core::arch::asm!(
+            "ecall",
+            in("a7") 0x53525354u64,
+            in("a6") 0u64,
+            in("a0") 0u64,
+            in("a1") 0u64,
+            options(noreturn)
+        )
+    }
 }

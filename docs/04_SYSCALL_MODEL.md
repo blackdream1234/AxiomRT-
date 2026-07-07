@@ -205,3 +205,13 @@ Rationale: no filesystem, no network, no dynamic task creation, and no
 shared memory exist in v0.1 (docs/01_SCOPE_AND_NON_GOALS.md). An unknown or
 forbidden syscall number returns `ERR_INVALID_SYSCALL` and raises an
 IllegalSyscall fault against the caller.
+
+## Real OS extension (AXIOM-INIT/AXIOM-SHELL)
+
+The OS boot flow adds syscalls 8–14: `sys_task_start` (8),
+`sys_con_write` (9), `sys_con_read` (10), `sys_info` (11),
+`sys_task_kill` (12), `sys_task_restart` (13), `sys_shutdown` (14).
+Arguments, capability gates, and error codes are specified in
+docs/25_OS_BOOT_FLOW.md §4; all follow this document's validation
+rules (capability check before any state change, buffers validated
+before any copy, errors in a0).

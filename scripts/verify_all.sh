@@ -31,7 +31,8 @@ for t in boot_smoke_test \
          ipc_rendezvous_qemu_test \
          capability_qemu_test \
          supervisor_qemu_test \
-         full_fault_containment_demo_qemu_test; do
+         full_fault_containment_demo_qemu_test \
+         os_shell_qemu_test; do
     run "$t" "./tests/$t.sh"
 done
 

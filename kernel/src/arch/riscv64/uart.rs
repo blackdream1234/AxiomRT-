@@ -32,6 +32,24 @@ pub fn put_byte(byte: u8) {
     }
 }
 
+/// LSR bit 0: receive data ready.
+const LSR_DR: u8 = 1 << 0;
+
+/// Read one byte from the UART if one is waiting (polled, non-blocking;
+/// docs/25_OS_BOOT_FLOW.md §4 — the kernel offers the byte mechanism,
+/// the console service owns terminal policy).
+pub fn get_byte() -> Option<u8> {
+    // SAFETY: same MMIO discipline as put_byte — volatile single-byte
+    // access to the NS16550A LSR/RBR registers owned by the kernel.
+    unsafe {
+        if core::ptr::read_volatile((UART_BASE + LSR) as *const u8) & LSR_DR != 0 {
+            Some(core::ptr::read_volatile(UART_BASE as *const u8))
+        } else {
+            None
+        }
+    }
+}
+
 /// Write a string to the UART. `\n` is expanded to `\r\n` for terminals.
 pub fn put_str(s: &str) {
     for byte in s.bytes() {

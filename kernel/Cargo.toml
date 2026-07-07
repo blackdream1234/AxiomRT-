@@ -30,6 +30,7 @@ demo_cap = []
 demo_supervisor = []
 # Full four-task fault-containment demo (AXIOM-DEMO, v0.9). Off by default.
 demo_full = []
+os_boot = []
 
 [lib]
 name = "kernel"

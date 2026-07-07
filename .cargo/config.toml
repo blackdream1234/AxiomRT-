@@ -8,7 +8,14 @@ target = "riscv64gc-unknown-none-elf"
 [target.riscv64gc-unknown-none-elf]
 # Linker script added by AXIOM-BOOT-002. Only used when linking a binary;
 # `cargo check` does not need it. Run cargo from the repository root.
-rustflags = ["-C", "link-arg=-Tkernel/linker.ld"]
+# Jump tables are disabled (AXIOM-INIT-002): LLVM emits them into
+# .rodata even for .user.text functions, which would make U-mode
+# services fault on kernel memory; the kernel also gains freedom from
+# data-driven indirect branches (docs/25_OS_BOOT_FLOW.md §2).
+rustflags = [
+    "-C", "link-arg=-Tkernel/linker.ld",
+    "-C", "llvm-args=-min-jump-table-entries=999",
+]
 
 # axiomctl developer CLI (AXIOM-CLI-001, docs/23_AXIOMCTL_CLI.md).
 # The alias pins the host target because [build].target above is

@@ -214,6 +214,10 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
         // remains a safe halt (kernel invariant violation).
         CAUSE_ILLEGAL_INSTRUCTION => {
             report("illegal-instruction", scause, frame);
+            if frame.is_from_user() && crate::dispatch::contain_fault(frame, "illegal_instruction")
+            {
+                return;
+            }
             if frame.is_from_user() && contain_user_fault(frame, "illegal_instruction") {
                 return;
             }
@@ -260,6 +264,11 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
             report("page-fault", scause, frame);
             if frame.is_from_user() {
                 let reason = page_fault_reason(scause, read_stval());
+                // Multi-task containment (docs/26 §3): Faulted +
+                // supervisor notify + reschedule.
+                if crate::dispatch::contain_fault(frame, reason) {
+                    return;
+                }
                 if contain_user_fault(frame, reason) {
                     return;
                 }
@@ -273,6 +282,9 @@ pub extern "C" fn trap_handler(frame: &mut TrapFrame) {
         // From kernel mode: controlled panic (AXIOM-TRAP-001).
         _ => {
             report("unknown", scause, frame);
+            if frame.is_from_user() && crate::dispatch::contain_fault(frame, "exception") {
+                return;
+            }
             if frame.is_from_user() && contain_user_fault(frame, "exception") {
                 return;
             }

@@ -39,6 +39,21 @@ SECTIONS
         __rodata_end = .;
     }
 
+    /* User-region services (docs/25_OS_BOOT_FLOW.md §2): constrained
+     * U-mode Rust code and constants, gathered apart from kernel
+     * .text/.rodata so service address spaces can map exactly this
+     * span (text U+R+X, rodata U+R) without exposing kernel pages. */
+    .user : ALIGN(4K) {
+        __user_text_start = .;
+        *(.user.text .user.text.*)
+        . = ALIGN(4K);
+        __user_text_end = .;
+        __user_rodata_start = .;
+        *(.user.rodata .user.rodata.*)
+        . = ALIGN(4K);
+        __user_rodata_end = .;
+    }
+
     /* Writable region: data, bss, and boot stack are one R+W span. */
     .data : ALIGN(4K) {
         __data_start = .;
