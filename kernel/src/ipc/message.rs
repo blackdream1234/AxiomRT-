@@ -11,7 +11,7 @@
 use crate::thread::ThreadId;
 
 /// Fixed maximum message size in bytes (docs/08_IPC_MODEL.md §2).
-pub const MSG_MAX_BYTES: usize = 64;
+pub const MSG_MAX_BYTES: usize = 128;
 
 /// Explicit failure behavior for message construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

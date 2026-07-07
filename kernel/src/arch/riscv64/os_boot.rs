@@ -787,8 +787,41 @@ umsg!(F_MFAULT, F_MFAULT_LEN, b"/apps/fault_demo.manifest");
 umsg!(F_ABOUT, F_ABOUT_LEN, b"/docs/about");
 umsg!(F_STORV, F_STORV_LEN, b"/storage/version");
 umsg!(Q_BLOCK1, Q_BLOCK1_LEN, b"READ block=1");
+// /bin restricted app image records (docs/32; docs/33 §3). The three
+// valid records are storage-backed (blocks 4-6); the invalid ones are
+// deliberately corrupt fs-static test fixtures.
+umsg!(F_BIN, F_BIN_LEN, b"/bin");
+umsg!(F_BHELLO, F_BHELLO_LEN, b"/bin/hello.app");
+umsg!(F_BCOUNTER, F_BCOUNTER_LEN, b"/bin/counter.app");
+umsg!(F_BFAULT, F_BFAULT_LEN, b"/bin/fault_demo.app");
+umsg!(F_BBADMAGIC, F_BBADMAGIC_LEN, b"/bin/invalid_bad_magic.app");
+umsg!(F_BBADCAP, F_BBADCAP_LEN, b"/bin/invalid_bad_cap.app");
+umsg!(F_BBADSUM, F_BBADSUM_LEN, b"/bin/invalid_bad_checksum.app");
+umsg!(Q_BLOCK4, Q_BLOCK4_LEN, b"READ block=4");
+umsg!(Q_BLOCK5, Q_BLOCK5_LEN, b"READ block=5");
+umsg!(Q_BLOCK6, Q_BLOCK6_LEN, b"READ block=6");
+umsg!(
+    A_BADMAGIC,
+    A_BADMAGIC_LEN,
+    b"BXAPP1 invalid_bad_magic 0 4096 4096 1 none 8192 0000"
+);
+umsg!(
+    A_BADCAP,
+    A_BADCAP_LEN,
+    b"AXAPP1 invalid_bad_cap 0 4096 4096 1 mmio 8192 0d18"
+);
+umsg!(
+    A_BADSUM,
+    A_BADSUM_LEN,
+    b"AXAPP1 invalid_bad_checksum 0 4096 4096 1 none 8192 0000"
+);
+umsg!(
+    R_BIN,
+    R_BIN_LEN,
+    b"OK hello.app counter.app fault_demo.app invalid_bad_magic.app invalid_bad_cap.app invalid_bad_checksum.app"
+);
 // Directory listings and file contents (single bounded reply each).
-umsg!(R_ROOT, R_ROOT_LEN, b"OK etc apps docs");
+umsg!(R_ROOT, R_ROOT_LEN, b"OK etc apps docs bin");
 umsg!(R_ETC, R_ETC_LEN, b"OK version limitations");
 umsg!(
     R_APPS,
@@ -836,6 +869,38 @@ fn fs_reply(p: *const u8, len: usize) {
     sys3(SYS_SEND, 0, p as u64, len as u64);
 }
 
+/// Fetch one storage block on the fs service's storage capability and
+/// forward the payload with the `OK data=` frame stripped (docs/33
+/// §6): the client receives the bare app image record. Any storage
+/// failure answers ERR not_found; fs never invents content.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn fs_stor_record(qp: *const u8, qlen: usize) {
+    let mut sb = MaybeUninit::<[u8; 64]>::uninit();
+    let sp = addr_of_mut!(sb) as *mut u8;
+    if sys3(SYS_SEND, 1, qp as u64, qlen as u64) < 0 {
+        fs_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+        return;
+    }
+    let sr = sys3(SYS_RECV, 1, sp as u64, 64);
+    if sr > S_R_DATA_LEN as i64
+        && starts_with(
+            sp,
+            sr as usize,
+            addr_of!(S_R_DATA) as *const u8,
+            S_R_DATA_LEN,
+        )
+    {
+        // SAFETY: prefix verified; the payload follows it in-bounds.
+        fs_reply(
+            unsafe { sp.add(S_R_DATA_LEN) } as *const u8,
+            sr as usize - S_R_DATA_LEN,
+        );
+    } else {
+        fs_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+    }
+}
+
 /// fs_service main loop (docs/28 §3): parse one bounded request,
 /// answer one bounded reply; every malformed input gets an ERR reply.
 #[link_section = ".user.text"]
@@ -859,6 +924,8 @@ extern "C" fn fs_body() -> ! {
                 fs_reply(addr_of!(R_APPS) as *const u8, R_APPS_LEN);
             } else if eqs(p, m, addr_of!(F_DOCS) as *const u8, F_DOCS_LEN) {
                 fs_reply(addr_of!(R_DOCS) as *const u8, R_DOCS_LEN);
+            } else if eqs(p, m, addr_of!(F_BIN) as *const u8, F_BIN_LEN) {
+                fs_reply(addr_of!(R_BIN) as *const u8, R_BIN_LEN);
             } else {
                 fs_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
             }
@@ -877,6 +944,18 @@ extern "C" fn fs_body() -> ! {
                 fs_reply(addr_of!(R_MFAULT) as *const u8, R_MFAULT_LEN);
             } else if eqs(p, m, addr_of!(F_ABOUT) as *const u8, F_ABOUT_LEN) {
                 fs_reply(addr_of!(R_ABOUT) as *const u8, R_ABOUT_LEN);
+            } else if eqs(p, m, addr_of!(F_BHELLO) as *const u8, F_BHELLO_LEN) {
+                fs_stor_record(addr_of!(Q_BLOCK4) as *const u8, Q_BLOCK4_LEN);
+            } else if eqs(p, m, addr_of!(F_BCOUNTER) as *const u8, F_BCOUNTER_LEN) {
+                fs_stor_record(addr_of!(Q_BLOCK5) as *const u8, Q_BLOCK5_LEN);
+            } else if eqs(p, m, addr_of!(F_BFAULT) as *const u8, F_BFAULT_LEN) {
+                fs_stor_record(addr_of!(Q_BLOCK6) as *const u8, Q_BLOCK6_LEN);
+            } else if eqs(p, m, addr_of!(F_BBADMAGIC) as *const u8, F_BBADMAGIC_LEN) {
+                fs_reply(addr_of!(A_BADMAGIC) as *const u8, A_BADMAGIC_LEN);
+            } else if eqs(p, m, addr_of!(F_BBADCAP) as *const u8, F_BBADCAP_LEN) {
+                fs_reply(addr_of!(A_BADCAP) as *const u8, A_BADCAP_LEN);
+            } else if eqs(p, m, addr_of!(F_BBADSUM) as *const u8, F_BBADSUM_LEN) {
+                fs_reply(addr_of!(A_BADSUM) as *const u8, A_BADSUM_LEN);
             } else if eqs(p, m, addr_of!(F_STORV) as *const u8, F_STORV_LEN) {
                 // Storage-backed path (docs/29 §7): nested synchronous
                 // IPC on the fs service's own storage capability.
@@ -924,12 +1003,48 @@ umsg!(B0, B0_LEN, b"AXSTOR v1 blocks=8 bs=48 ro=1");
 umsg!(B1, B1_LEN, b"AxiomRT v1.6-dev evaluation stage");
 umsg!(B2, B2_LEN, b"AxiomRT microkernel safety runtime");
 umsg!(B3, B3_LEN, b"apps: hello counter fault_demo prio=2");
+// Blocks 4-6: restricted app image records (docs/32 §3; were
+// `reserved` filler until v1.6). Checksum = 16-bit additive sum of
+// every byte before the trailing ` xxxx`, 4 lowercase hex digits.
+umsg!(
+    BH4,
+    BH4_LEN,
+    b"AXAPP1 hello 0 4096 4096 1 console 8192 0a6d"
+);
+umsg!(
+    BC5,
+    BC5_LEN,
+    b"AXAPP1 counter 0 4096 4096 1 console 8192 0b59"
+);
+umsg!(
+    BF6,
+    BF6_LEN,
+    b"AXAPP1 fault_demo 0 4096 4096 1 none 8192 0b36"
+);
 umsg!(BRES, BRES_LEN, b"reserved");
 
 /// Answer one READ: branch chain with a call per arm — a
 /// value-returning match here becomes an LLVM lookup table in kernel
 /// .rodata, which U-mode must never reference (docs/25 §2; found live
 /// when storage_service page-faulted on 0xfb58 and was contained).
+/// Split at ≤5 arms per function: with 8 same-callee constant-arg arms
+/// in one chain, LLVM hoists the (ptr,len) pairs into a kernel-.rodata
+/// lookup table even without a jump table (found live again in v1.6:
+/// storage_service page-faulted on 0xf020 fetching block 4).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn block_reply_hi(qp: *mut u8, n: u64) {
+    if n == 4 {
+        storage_send_block(qp, addr_of!(BH4) as *const u8, BH4_LEN);
+    } else if n == 5 {
+        storage_send_block(qp, addr_of!(BC5) as *const u8, BC5_LEN);
+    } else if n == 6 {
+        storage_send_block(qp, addr_of!(BF6) as *const u8, BF6_LEN);
+    } else {
+        storage_send_block(qp, addr_of!(BRES) as *const u8, BRES_LEN);
+    }
+}
+
 #[link_section = ".user.text"]
 #[inline(never)]
 fn block_reply(qp: *mut u8, n: u64) {
@@ -942,7 +1057,7 @@ fn block_reply(qp: *mut u8, n: u64) {
     } else if n == 3 {
         storage_send_block(qp, addr_of!(B3) as *const u8, B3_LEN);
     } else if n <= 7 {
-        storage_send_block(qp, addr_of!(BRES) as *const u8, BRES_LEN);
+        block_reply_hi(qp, n);
     } else {
         sys3(
             SYS_SEND,
@@ -1461,7 +1576,9 @@ fn shell_fs_cmd(bp: *const u8, n: usize, tail_at: usize, cat: bool, qp: *mut u8,
         uput!(M_ERR, M_ERR_LEN);
         return;
     }
-    let r = sys3(SYS_RECV, 5, rp as u64, 64);
+    // 128-byte receive window: directory listings may exceed 64 bytes
+    // since the /bin records landed (docs/33 §3).
+    let r = sys3(SYS_RECV, 5, rp as u64, 128);
     if r > 0 {
         uwrite_ptr(rp, r as usize);
         uput!(M_NL, M_NL_LEN);

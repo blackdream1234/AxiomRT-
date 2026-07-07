@@ -25,7 +25,7 @@ complexity and would break the copy-only information flow.
 
 ## 2. Message (`kernel/src/ipc/message.rs`)
 
-* `MSG_MAX_BYTES = 64`. Oversized payloads are rejected **before any
+* `MSG_MAX_BYTES = 128` (64 before v1.6; raised for the /bin listing, docs/33 §3). Oversized payloads are rejected **before any
   copy** (`MessageError::TooLarge` → `ERR_MSG_TOO_LARGE`).
 * A `Message` is a copy: mutating the source buffer after construction
   cannot affect it (unit-tested).

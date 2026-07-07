@@ -17,7 +17,7 @@ endpoint without a capability check. No shared memory. Demo behind the
 
 ## 2. Message Buffer and Bound
 
-One bounded message at a time (`IPC_MSG_MAX = 64` bytes) is staged in a
+One bounded message at a time (`IPC_MSG_MAX = 128` bytes (64 before v1.6; raised for the /bin listing, docs/33 §3)) is staged in a
 kernel buffer (`KMSG`). There is no queue and no shared memory: the
 payload is copied sender→kernel and kernel→receiver, so the two tasks
 never alias memory (docs/08 §1).

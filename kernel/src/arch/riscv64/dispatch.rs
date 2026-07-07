@@ -248,7 +248,9 @@ const WATCHDOG_WINDOW: u64 = 4;
 // ---- On-target IPC state (AXIOM-IPCRT) ----------------------------------
 
 /// Bounded message size (docs/17 §2; matches the host IPC model).
-const IPC_MSG_MAX: usize = 64;
+/// 128 since v1.6: the /bin directory listing (docs/33 §3) exceeds 64
+/// bytes; the bound stays explicit, checked, and small.
+const IPC_MSG_MAX: usize = 128;
 /// User data window the demo message buffers live in (the user stack
 /// page mapped by paging_hw at USER_STACK_VA). A user IPC buffer must
 /// lie fully inside it (AXIOM-IPCRT-002/003).
