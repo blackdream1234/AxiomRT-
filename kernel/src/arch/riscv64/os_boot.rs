@@ -45,8 +45,15 @@ const EP_LINE: u32 = 1;
 const EP_FAULT: u32 = 2;
 const EP_EVENT: u32 = 3;
 
+/// Shell <-> app_loader request/reply channel (docs/27 §7).
+const EP_APP: u32 = 0;
+
 /// Service-table index of the faulty demo task (`run demo`).
 const SVC_FAULTY: u64 = 4;
+/// Service-table indexes of the built-in applications (docs/27 §5).
+const APP_HELLO: u64 = 6;
+const APP_FAULT: u64 = 7;
+const APP_COUNTER: u64 = 8;
 
 // ---------------------------------------------------------------------
 // Boot (S-mode)
@@ -54,7 +61,11 @@ const SVC_FAULTY: u64 = 4;
 
 #[repr(C, align(4096))]
 struct Stack([u8; 4096]);
-static mut OS_STACKS: [Stack; 6] = [
+static mut OS_STACKS: [Stack; 10] = [
+    Stack([0; 4096]),
+    Stack([0; 4096]),
+    Stack([0; 4096]),
+    Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
@@ -67,12 +78,12 @@ static mut OS_STACKS: [Stack; 6] = [
 struct TrapStack([u8; 8 * 1024]);
 static mut OS_TRAP_STACK: TrapStack = TrapStack([0; 8 * 1024]);
 
-const NO_CAPS: [Option<Cap>; 4] = [None, None, None, None];
+const NO_CAPS: [Option<Cap>; dispatch::CAPS_PER_TASK] = [None; dispatch::CAPS_PER_TASK];
 
 /// Service table (docs/25 §3). Entry addresses, stacks, and capability
 /// grants are runtime values, patched once by `os_boot` before
 /// dispatching; the rest is fixed here.
-static mut TABLE: [ServiceDef; 5] = [
+static mut TABLE: [ServiceDef; 9] = [
     ServiceDef {
         name: "supervisor_service",
         entry: 0,
@@ -113,6 +124,38 @@ static mut TABLE: [ServiceDef; 5] = [
         slot: 5,
         caps: NO_CAPS,
     },
+    ServiceDef {
+        name: "app_loader_service",
+        entry: 0,
+        stack_phys: 0,
+        prio: 2,
+        slot: 6,
+        caps: NO_CAPS,
+    },
+    ServiceDef {
+        name: "hello",
+        entry: 0,
+        stack_phys: 0,
+        prio: 2,
+        slot: 7,
+        caps: NO_CAPS,
+    },
+    ServiceDef {
+        name: "fault_demo",
+        entry: 0,
+        stack_phys: 0,
+        prio: 2,
+        slot: 8,
+        caps: NO_CAPS,
+    },
+    ServiceDef {
+        name: "counter",
+        entry: 0,
+        stack_phys: 0,
+        prio: 2,
+        slot: 9,
+        caps: NO_CAPS,
+    },
 ];
 
 fn stack_phys(i: usize) -> u64 {
@@ -125,7 +168,7 @@ fn stack_phys(i: usize) -> u64 {
 /// timer, dispatch.
 pub fn os_boot() -> ! {
     // SAFETY: single hart, boot-time exclusive access, before start().
-    let table: &'static mut [ServiceDef; 5] = unsafe { &mut *addr_of_mut!(TABLE) };
+    let table: &'static mut [ServiceDef; 9] = unsafe { &mut *addr_of_mut!(TABLE) };
     table[0].entry = supervisor_body as *const () as u64;
     table[0].stack_phys = stack_phys(1);
     table[0].caps[0] = Some(cap_endpoint(EP_FAULT, CAP_RIGHT_RECV | CAP_RIGHT_CONTROL));
@@ -142,9 +185,26 @@ pub fn os_boot() -> ! {
     table[3].caps[1] = Some(cap_console(CAP_RIGHT_SEND));
     table[3].caps[2] = Some(cap_info());
     table[3].caps[3] = Some(cap_control());
+    table[3].caps[4] = Some(cap_endpoint(EP_APP, CAP_RIGHT_SEND | CAP_RIGHT_RECV));
     table[4].entry = faulty_body as *const () as u64;
     table[4].stack_phys = stack_phys(5);
     // faulty_task: no capabilities at all (its IPC attempt is denied).
+    // App loader: owns app policy; app request channel + task control
+    // to request starts (docs/27 §8).
+    table[5].entry = app_loader_body as *const () as u64;
+    table[5].stack_phys = stack_phys(6);
+    table[5].caps[0] = Some(cap_endpoint(EP_APP, CAP_RIGHT_RECV | CAP_RIGHT_SEND));
+    table[5].caps[1] = Some(cap_control());
+    // Applications (docs/27 §5): manifest capability grants only.
+    table[6].entry = hello_body as *const () as u64;
+    table[6].stack_phys = stack_phys(7);
+    table[6].caps[0] = Some(cap_console(CAP_RIGHT_SEND));
+    table[7].entry = fault_demo_body as *const () as u64;
+    table[7].stack_phys = stack_phys(8);
+    // fault_demo: deliberately zero capabilities.
+    table[8].entry = counter_body as *const () as u64;
+    table[8].stack_phys = stack_phys(9);
+    table[8].caps[0] = Some(cap_console(CAP_RIGHT_SEND));
 
     // SAFETY: boot-time, single hart, called once.
     unsafe { dispatch::set_service_table(table) };
@@ -302,6 +362,9 @@ extern "C" fn init_body() -> ! {
         sys3(SYS_TASK_START, i, 0, 0);
         i += 1;
     }
+    // Applications are policy of the app loader; init only starts it
+    // (table index 5). Index 4 (faulty demo) stays shell-on-demand.
+    sys3(SYS_TASK_START, 5, 0, 0);
     sys3(SYS_EXIT, 0, 0, 0);
     loop {
         sys3(SYS_YIELD, 0, 0, 0);
@@ -414,6 +477,149 @@ extern "C" fn console_body() -> ! {
 }
 
 // ---------------------------------------------------------------------
+// app_loader_service (U-mode): owns app policy (AXIOM-APP-003)
+// ---------------------------------------------------------------------
+
+umsg!(A_LIST, A_LIST_LEN, b"apps: hello fault_demo counter");
+umsg!(A_HELLO, A_HELLO_LEN, b"hello");
+umsg!(A_FAULT, A_FAULT_LEN, b"fault_demo");
+umsg!(A_COUNTER, A_COUNTER_LEN, b"counter");
+umsg!(
+    AI_HELLO,
+    AI_HELLO_LEN,
+    b"hello: greeter prio=2 caps=console restart=rerun"
+);
+umsg!(
+    AI_FAULT,
+    AI_FAULT_LEN,
+    b"fault_demo: containment demo prio=2 caps=none"
+);
+umsg!(
+    AI_COUNTER,
+    AI_COUNTER_LEN,
+    b"counter: progress demo prio=2 caps=console"
+);
+umsg!(A_STARTED, A_STARTED_LEN, b"started");
+umsg!(A_ERR, A_ERR_LEN, b"error: cannot start");
+umsg!(A_UNKNOWN, A_UNKNOWN_LEN, b"unknown app");
+umsg!(A_BADCMD, A_BADCMD_LEN, b"unknown app command");
+
+/// One bounded reply to the shell over the app channel.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn app_reply(p: *const u8, len: usize) {
+    sys3(SYS_SEND, 0, p as u64, len as u64);
+}
+
+/// App loader main loop: recv one raw shell line, apply app policy,
+/// reply one line (docs/27 §7/§8). The kernel never parses app names.
+#[link_section = ".user.text"]
+extern "C" fn app_loader_body() -> ! {
+    let mut buf = MaybeUninit::<[u8; 64]>::uninit();
+    let bp = addr_of_mut!(buf) as *mut u8;
+    loop {
+        let r = sys3(SYS_RECV, 0, bp as u64, 64);
+        if r <= 0 {
+            continue;
+        }
+        let n = r as usize;
+        if eqs(bp, n, addr_of!(C_APPS) as *const u8, C_APPS_LEN) {
+            app_reply(addr_of!(A_LIST) as *const u8, A_LIST_LEN);
+        } else if starts_with(bp, n, addr_of!(C_APPINFO) as *const u8, C_APPINFO_LEN) {
+            let p = unsafe { bp.add(C_APPINFO_LEN) } as *const u8;
+            let m = n - C_APPINFO_LEN;
+            if eqs(p, m, addr_of!(A_HELLO) as *const u8, A_HELLO_LEN) {
+                app_reply(addr_of!(AI_HELLO) as *const u8, AI_HELLO_LEN);
+            } else if eqs(p, m, addr_of!(A_FAULT) as *const u8, A_FAULT_LEN) {
+                app_reply(addr_of!(AI_FAULT) as *const u8, AI_FAULT_LEN);
+            } else if eqs(p, m, addr_of!(A_COUNTER) as *const u8, A_COUNTER_LEN) {
+                app_reply(addr_of!(AI_COUNTER) as *const u8, AI_COUNTER_LEN);
+            } else {
+                app_reply(addr_of!(A_UNKNOWN) as *const u8, A_UNKNOWN_LEN);
+            }
+        } else if starts_with(bp, n, addr_of!(C_RUNSP) as *const u8, C_RUNSP_LEN) {
+            let p = unsafe { bp.add(C_RUNSP_LEN) } as *const u8;
+            let m = n - C_RUNSP_LEN;
+            let idx: u64 = if eqs(p, m, addr_of!(A_HELLO) as *const u8, A_HELLO_LEN) {
+                APP_HELLO
+            } else if eqs(p, m, addr_of!(A_FAULT) as *const u8, A_FAULT_LEN) {
+                APP_FAULT
+            } else if eqs(p, m, addr_of!(A_COUNTER) as *const u8, A_COUNTER_LEN) {
+                APP_COUNTER
+            } else {
+                u64::MAX
+            };
+            if idx == u64::MAX {
+                app_reply(addr_of!(A_UNKNOWN) as *const u8, A_UNKNOWN_LEN);
+            } else if sys3(SYS_TASK_START, idx, 0, 0) < 0 {
+                app_reply(addr_of!(A_ERR) as *const u8, A_ERR_LEN);
+            } else {
+                app_reply(addr_of!(A_STARTED) as *const u8, A_STARTED_LEN);
+            }
+        } else {
+            app_reply(addr_of!(A_BADCMD) as *const u8, A_BADCMD_LEN);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Built-in applications (AXIOM-APP-005/006/007, docs/27 §5)
+// ---------------------------------------------------------------------
+
+umsg!(M_HELLO_OUT, M_HELLO_OUT_LEN, b"hello from app: hello\n");
+umsg!(M_CNT_PRE, M_CNT_PRE_LEN, b"APP counter progress=");
+umsg!(M_CNT_DONE, M_CNT_DONE_LEN, b"APP counter done\n");
+
+/// hello: print one line through its console capability, exit cleanly.
+#[link_section = ".user.text"]
+extern "C" fn hello_body() -> ! {
+    uput!(M_HELLO_OUT, M_HELLO_OUT_LEN);
+    sys3(SYS_EXIT, 0, 0, 0);
+    loop {
+        sys3(SYS_YIELD, 0, 0, 0);
+    }
+}
+
+/// counter: three progress events with yields between, clean exit.
+#[link_section = ".user.text"]
+extern "C" fn counter_body() -> ! {
+    let mut d = MaybeUninit::<[u8; 2]>::uninit();
+    let dp = addr_of_mut!(d) as *mut u8;
+    let mut i: u8 = 1;
+    while i <= 3 {
+        uput!(M_CNT_PRE, M_CNT_PRE_LEN);
+        // SAFETY: two-byte stack buffer.
+        unsafe {
+            write_volatile(dp, b'0' + i);
+            write_volatile(dp.add(1), b'\n');
+        }
+        uwrite_ptr(dp, 2);
+        sys3(SYS_YIELD, 0, 0, 0);
+        i += 1;
+    }
+    uput!(M_CNT_DONE, M_CNT_DONE_LEN);
+    sys3(SYS_EXIT, 0, 0, 0);
+    loop {
+        sys3(SYS_YIELD, 0, 0, 0);
+    }
+}
+
+/// fault_demo: unauthorized console write (denied: zero capabilities),
+/// then CPU exhaustion; contained by the watchdog, killed by the
+/// supervisor, while shell and console keep running.
+#[link_section = ".user.text"]
+extern "C" fn fault_demo_body() -> ! {
+    sys3(
+        SYS_CON_WRITE,
+        addr_of!(M_HELLO_OUT) as *const u8 as u64,
+        M_HELLO_OUT_LEN as u64,
+        0,
+    );
+    // SAFETY: intentional infinite loop; never returns.
+    unsafe { core::arch::asm!("1:", "j 1b", options(noreturn)) }
+}
+
+// ---------------------------------------------------------------------
 // shell_service (U-mode): parse + execute (AXIOM-SHELL-003..009)
 // ---------------------------------------------------------------------
 
@@ -454,6 +660,9 @@ umsg!(C_MEMORY, C_MEMORY_LEN, b"memory");
 umsg!(C_UPTIME, C_UPTIME_LEN, b"uptime");
 umsg!(C_EVENTS, C_EVENTS_LEN, b"events");
 umsg!(C_RUN_DEMO, C_RUN_DEMO_LEN, b"run demo");
+umsg!(C_APPS, C_APPS_LEN, b"apps");
+umsg!(C_APPINFO, C_APPINFO_LEN, b"app info ");
+umsg!(C_RUNSP, C_RUNSP_LEN, b"run ");
 umsg!(C_KILL, C_KILL_LEN, b"kill ");
 umsg!(C_RESTART, C_RESTART_LEN, b"restart ");
 umsg!(C_CLEAR, C_CLEAR_LEN, b"clear");
@@ -464,6 +673,24 @@ macro_rules! is_cmd {
     ($bp:expr, $n:expr, $name:ident, $len:ident) => {
         eqs($bp, $n, addr_of!($name) as *const u8, $len)
     };
+}
+
+/// Forward one raw app command line to the app loader and print its
+/// bounded reply (docs/27 §7): the shell holds no app-name knowledge.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn shell_app_forward(bp: *mut u8, n: usize, rp: *mut u8) {
+    if sys3(SYS_SEND, 4, bp as u64, n as u64) < 0 {
+        uput!(M_ERR, M_ERR_LEN);
+        return;
+    }
+    let r = sys3(SYS_RECV, 4, rp as u64, 64);
+    if r > 0 {
+        uwrite_ptr(rp, r as usize);
+        uput!(M_NL, M_NL_LEN);
+    } else {
+        uput!(M_ERR, M_ERR_LEN);
+    }
 }
 
 #[link_section = ".user.text"]
@@ -515,6 +742,13 @@ extern "C" fn shell_body() -> ! {
             if sys3(SYS_TASK_START, SVC_FAULTY, 0, 0) < 0 {
                 uput!(M_ERR, M_ERR_LEN);
             }
+        } else if is_cmd!(bp, n, C_APPS, C_APPS_LEN)
+            || starts_with(bp, n, addr_of!(C_APPINFO) as *const u8, C_APPINFO_LEN)
+            || starts_with(bp, n, addr_of!(C_RUNSP) as *const u8, C_RUNSP_LEN)
+        {
+            // "run demo" was matched above; every other apps / app info
+            // / run <name> line is loader policy.
+            shell_app_forward(bp, n, op);
         } else if starts_with(bp, n, addr_of!(C_KILL) as *const u8, C_KILL_LEN) {
             let idx = parse_dec(bp, C_KILL_LEN, n);
             if idx == u64::MAX || sys3(SYS_TASK_KILL, idx, 0, 0) < 0 {

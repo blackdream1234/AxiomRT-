@@ -58,7 +58,7 @@ const RIGHT_SEND: u16 = 1 << 3;
 const RIGHT_RECV: u16 = 1 << 4;
 const RIGHT_CONTROL: u16 = 1 << 7;
 /// Capability slots per task (small, static).
-const CAPS_PER_TASK: usize = 4;
+pub const CAPS_PER_TASK: usize = 6;
 
 /// On-target capability: (object type, object id, rights). The running
 /// form of the host `Capability` (docs/06 §3).
@@ -184,8 +184,8 @@ const EMPTY_TCB: Tcb = Tcb {
     stack_top_va: 0,
 };
 
-/// Maximum on-target tasks (8 since the OS boot flow, docs/25 §3).
-pub const MAX_TASKS: usize = 8;
+/// Maximum on-target tasks (10 since the app phase, docs/27 §2).
+pub const MAX_TASKS: usize = 10;
 
 static mut TASKS: [Tcb; MAX_TASKS] = [EMPTY_TCB; MAX_TASKS];
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
@@ -727,7 +727,7 @@ fn ipc_send(frame: &mut TrapFrame) {
         emit("IPC_DENIED op=send reason=msg_too_large task=", cur_name);
         return;
     }
-    if !valid_user_buf(buf, len) {
+    if !(len <= IPC_MSG_MAX && in_readable_window(buf, len)) {
         frame.set_a0(ERR_INVALID_ARG);
         emit("IPC_DENIED op=send reason=bad_buffer task=", cur_name);
         return;
@@ -1029,22 +1029,36 @@ fn start_service(index: usize) -> i64 {
     let Some(def) = table.get(index) else {
         return ERR_INVALID_ARG;
     };
-    if tasks_mut()[def.slot].state != RtState::Empty {
-        return ERR_NO_SLOT;
+    match tasks_mut()[def.slot].state {
+        RtState::Empty => {
+            let uas = paging_hw::build_service_address_space(def.slot, def.entry, def.stack_phys);
+            // SAFETY: single hart; the slot is Empty, no live task uses it.
+            unsafe {
+                register_task(
+                    def.slot,
+                    def.name,
+                    def.prio,
+                    uas.root,
+                    uas.entry_va,
+                    uas.stack_top_va,
+                );
+            }
+            tasks_mut()[def.slot].caps = def.caps;
+        }
+        // A terminated app returns to Available and is re-armed with
+        // its initial frame and unchanged capabilities (docs/27 §6).
+        RtState::Killed | RtState::Faulted => {
+            const SSTATUS_SPP: u64 = 1 << 8;
+            const SSTATUS_SPIE: u64 = 1 << 5;
+            let tasks = tasks_mut();
+            let mut f = TrapFrame::new_user(tasks[def.slot].entry_va, tasks[def.slot].stack_top_va);
+            f.sstatus = (read_sstatus() & !SSTATUS_SPP) | SSTATUS_SPIE;
+            tasks[def.slot].frame = f;
+            tasks[def.slot].pending_ipc = None;
+            tasks[def.slot].state = RtState::Ready;
+        }
+        _ => return ERR_NO_SLOT,
     }
-    let uas = paging_hw::build_service_address_space(def.slot, def.entry, def.stack_phys);
-    // SAFETY: single hart; the slot was Empty, so no live task uses it.
-    unsafe {
-        register_task(
-            def.slot,
-            def.name,
-            def.prio,
-            uas.root,
-            uas.entry_va,
-            uas.stack_top_va,
-        );
-    }
-    tasks_mut()[def.slot].caps = def.caps;
     ring_push(EV_STARTED, def.slot);
     emit("SERVICE started=", def.name);
     def.slot as i64
