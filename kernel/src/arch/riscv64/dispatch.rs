@@ -110,6 +110,13 @@ pub const CAP_RIGHT_SEND: u16 = RIGHT_SEND;
 pub const CAP_RIGHT_RECV: u16 = RIGHT_RECV;
 #[allow(dead_code)] // os_boot-only API
 pub const CAP_RIGHT_CONTROL: u16 = RIGHT_CONTROL;
+// Filesystem rights (docs/28 §7): declarative bits on the fs endpoint
+// capability; the kernel checks transport rights only and never
+// parses the fs protocol.
+#[allow(dead_code)] // os_boot-only API
+pub const CAP_RIGHT_FS_READ: u16 = 1 << 5;
+#[allow(dead_code)] // os_boot-only API
+pub const CAP_RIGHT_FS_LIST: u16 = 1 << 6;
 
 /// Outcome of a capability lookup (fixed check order, docs/06 §4).
 /// On success carries the resolved endpoint id.
@@ -185,7 +192,7 @@ const EMPTY_TCB: Tcb = Tcb {
 };
 
 /// Maximum on-target tasks (10 since the app phase, docs/27 §2).
-pub const MAX_TASKS: usize = 10;
+pub const MAX_TASKS: usize = 11;
 
 static mut TASKS: [Tcb; MAX_TASKS] = [EMPTY_TCB; MAX_TASKS];
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
@@ -213,9 +220,10 @@ enum Ep {
     ReceiverWaiting { tid: usize, dst: u64, cap: usize },
 }
 
-/// Endpoint ids used on target: 1 = demo log endpoint (v0.6/0.7),
-/// 2 = fault channel (supervisor), 3 = event channel (logger) — v0.8.
-const NUM_ENDPOINTS: usize = 4;
+/// Endpoint ids used on target: 0 = app channel (docs/27), 1 = shell
+/// line channel / demo log, 2 = fault channel, 3 = event channel,
+/// 4 = filesystem channel (docs/28).
+const NUM_ENDPOINTS: usize = 5;
 static mut ENDPOINTS: [Ep; NUM_ENDPOINTS] = [Ep::Idle; NUM_ENDPOINTS];
 /// Kernel staging buffer for user send→recv copies (bounded, no shared
 /// memory, docs/17 §2).

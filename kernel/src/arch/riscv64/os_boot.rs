@@ -20,7 +20,7 @@ use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 
 use crate::dispatch::{
     self, cap_console, cap_control, cap_endpoint, cap_info, Cap, ServiceDef, CAP_RIGHT_CONTROL,
-    CAP_RIGHT_RECV, CAP_RIGHT_SEND,
+    CAP_RIGHT_FS_LIST, CAP_RIGHT_FS_READ, CAP_RIGHT_RECV, CAP_RIGHT_SEND,
 };
 use crate::paging_hw;
 use crate::timer;
@@ -47,6 +47,8 @@ const EP_EVENT: u32 = 3;
 
 /// Shell <-> app_loader request/reply channel (docs/27 §7).
 const EP_APP: u32 = 0;
+/// Shell <-> fs_service channel (docs/28 §3).
+const EP_FS: u32 = 4;
 
 /// Service-table index of the faulty demo task (`run demo`).
 const SVC_FAULTY: u64 = 4;
@@ -61,7 +63,8 @@ const APP_COUNTER: u64 = 8;
 
 #[repr(C, align(4096))]
 struct Stack([u8; 4096]);
-static mut OS_STACKS: [Stack; 10] = [
+static mut OS_STACKS: [Stack; 11] = [
+    Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
@@ -83,7 +86,7 @@ const NO_CAPS: [Option<Cap>; dispatch::CAPS_PER_TASK] = [None; dispatch::CAPS_PE
 /// Service table (docs/25 §3). Entry addresses, stacks, and capability
 /// grants are runtime values, patched once by `os_boot` before
 /// dispatching; the rest is fixed here.
-static mut TABLE: [ServiceDef; 9] = [
+static mut TABLE: [ServiceDef; 10] = [
     ServiceDef {
         name: "supervisor_service",
         entry: 0,
@@ -156,6 +159,14 @@ static mut TABLE: [ServiceDef; 9] = [
         slot: 9,
         caps: NO_CAPS,
     },
+    ServiceDef {
+        name: "fs_service",
+        entry: 0,
+        stack_phys: 0,
+        prio: 2,
+        slot: 10,
+        caps: NO_CAPS,
+    },
 ];
 
 fn stack_phys(i: usize) -> u64 {
@@ -168,7 +179,7 @@ fn stack_phys(i: usize) -> u64 {
 /// timer, dispatch.
 pub fn os_boot() -> ! {
     // SAFETY: single hart, boot-time exclusive access, before start().
-    let table: &'static mut [ServiceDef; 9] = unsafe { &mut *addr_of_mut!(TABLE) };
+    let table: &'static mut [ServiceDef; 10] = unsafe { &mut *addr_of_mut!(TABLE) };
     table[0].entry = supervisor_body as *const () as u64;
     table[0].stack_phys = stack_phys(1);
     table[0].caps[0] = Some(cap_endpoint(EP_FAULT, CAP_RIGHT_RECV | CAP_RIGHT_CONTROL));
@@ -186,6 +197,11 @@ pub fn os_boot() -> ! {
     table[3].caps[2] = Some(cap_info());
     table[3].caps[3] = Some(cap_control());
     table[3].caps[4] = Some(cap_endpoint(EP_APP, CAP_RIGHT_SEND | CAP_RIGHT_RECV));
+    // Only the shell holds filesystem access (docs/28 §7).
+    table[3].caps[5] = Some(cap_endpoint(
+        EP_FS,
+        CAP_RIGHT_SEND | CAP_RIGHT_RECV | CAP_RIGHT_FS_READ | CAP_RIGHT_FS_LIST,
+    ));
     table[4].entry = faulty_body as *const () as u64;
     table[4].stack_phys = stack_phys(5);
     // faulty_task: no capabilities at all (its IPC attempt is denied).
@@ -205,6 +221,10 @@ pub fn os_boot() -> ! {
     table[8].entry = counter_body as *const () as u64;
     table[8].stack_phys = stack_phys(9);
     table[8].caps[0] = Some(cap_console(CAP_RIGHT_SEND));
+    // fs_service (docs/28): filesystem channel only; no other authority.
+    table[9].entry = fs_body as *const () as u64;
+    table[9].stack_phys = stack_phys(10);
+    table[9].caps[0] = Some(cap_endpoint(EP_FS, CAP_RIGHT_RECV | CAP_RIGHT_SEND));
 
     // SAFETY: boot-time, single hart, called once.
     unsafe { dispatch::set_service_table(table) };
@@ -365,6 +385,8 @@ extern "C" fn init_body() -> ! {
     // Applications are policy of the app loader; init only starts it
     // (table index 5). Index 4 (faulty demo) stays shell-on-demand.
     sys3(SYS_TASK_START, 5, 0, 0);
+    // Filesystem service (table index 9, docs/28).
+    sys3(SYS_TASK_START, 9, 0, 0);
     sys3(SYS_EXIT, 0, 0, 0);
     loop {
         sys3(SYS_YIELD, 0, 0, 0);
@@ -620,6 +642,123 @@ extern "C" fn fault_demo_body() -> ! {
 }
 
 // ---------------------------------------------------------------------
+// fs_service (U-mode): read-only filesystem (AXIOM-FS-002..004)
+// ---------------------------------------------------------------------
+
+// Protocol opcodes (docs/28 §3).
+umsg!(P_LS, P_LS_LEN, b"LS ");
+umsg!(P_CAT, P_CAT_LEN, b"CAT ");
+// Paths (docs/28 §5).
+umsg!(F_ROOT, F_ROOT_LEN, b"/");
+umsg!(F_ETC, F_ETC_LEN, b"/etc");
+umsg!(F_APPS, F_APPS_LEN, b"/apps");
+umsg!(F_DOCS, F_DOCS_LEN, b"/docs");
+umsg!(F_VERSION, F_VERSION_LEN, b"/etc/version");
+umsg!(F_LIMITS, F_LIMITS_LEN, b"/etc/limitations");
+umsg!(F_MHELLO, F_MHELLO_LEN, b"/apps/hello.manifest");
+umsg!(F_MCOUNTER, F_MCOUNTER_LEN, b"/apps/counter.manifest");
+umsg!(F_MFAULT, F_MFAULT_LEN, b"/apps/fault_demo.manifest");
+umsg!(F_ABOUT, F_ABOUT_LEN, b"/docs/about");
+// Directory listings and file contents (single bounded reply each).
+umsg!(R_ROOT, R_ROOT_LEN, b"OK etc apps docs");
+umsg!(R_ETC, R_ETC_LEN, b"OK version limitations");
+umsg!(
+    R_APPS,
+    R_APPS_LEN,
+    b"OK hello.manifest counter.manifest fault_demo.manifest"
+);
+umsg!(R_DOCS, R_DOCS_LEN, b"OK about");
+umsg!(
+    R_VERSION,
+    R_VERSION_LEN,
+    b"OK AxiomRT v1.3-readonly-fs RISC-V 64 evaluation stage"
+);
+umsg!(
+    R_LIMITS,
+    R_LIMITS_LEN,
+    b"OK emulator-only read-only evaluation build no cert claim"
+);
+umsg!(
+    R_MHELLO,
+    R_MHELLO_LEN,
+    b"OK hello: prio=2 caps=console restart=rerun"
+);
+umsg!(
+    R_MCOUNTER,
+    R_MCOUNTER_LEN,
+    b"OK counter: prio=2 caps=console restart=rerun"
+);
+umsg!(
+    R_MFAULT,
+    R_MFAULT_LEN,
+    b"OK fault_demo: prio=2 caps=none restart=rerun"
+);
+umsg!(
+    R_ABOUT,
+    R_ABOUT_LEN,
+    b"OK AxiomRT microkernel safety runtime see docs/INDEX.md"
+);
+umsg!(E_NOTFOUND, E_NOTFOUND_LEN, b"ERR not_found");
+umsg!(E_BADPATH, E_BADPATH_LEN, b"ERR bad_path");
+
+/// One bounded reply to the shell over the fs channel.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn fs_reply(p: *const u8, len: usize) {
+    sys3(SYS_SEND, 0, p as u64, len as u64);
+}
+
+/// fs_service main loop (docs/28 §3): parse one bounded request,
+/// answer one bounded reply; every malformed input gets an ERR reply.
+#[link_section = ".user.text"]
+extern "C" fn fs_body() -> ! {
+    let mut buf = MaybeUninit::<[u8; 64]>::uninit();
+    let bp = addr_of_mut!(buf) as *mut u8;
+    loop {
+        let r = sys3(SYS_RECV, 0, bp as u64, 64);
+        if r <= 0 {
+            continue;
+        }
+        let n = r as usize;
+        if starts_with(bp, n, addr_of!(P_LS) as *const u8, P_LS_LEN) {
+            let p = unsafe { bp.add(P_LS_LEN) } as *const u8;
+            let m = n - P_LS_LEN;
+            if eqs(p, m, addr_of!(F_ROOT) as *const u8, F_ROOT_LEN) {
+                fs_reply(addr_of!(R_ROOT) as *const u8, R_ROOT_LEN);
+            } else if eqs(p, m, addr_of!(F_ETC) as *const u8, F_ETC_LEN) {
+                fs_reply(addr_of!(R_ETC) as *const u8, R_ETC_LEN);
+            } else if eqs(p, m, addr_of!(F_APPS) as *const u8, F_APPS_LEN) {
+                fs_reply(addr_of!(R_APPS) as *const u8, R_APPS_LEN);
+            } else if eqs(p, m, addr_of!(F_DOCS) as *const u8, F_DOCS_LEN) {
+                fs_reply(addr_of!(R_DOCS) as *const u8, R_DOCS_LEN);
+            } else {
+                fs_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+            }
+        } else if starts_with(bp, n, addr_of!(P_CAT) as *const u8, P_CAT_LEN) {
+            let p = unsafe { bp.add(P_CAT_LEN) } as *const u8;
+            let m = n - P_CAT_LEN;
+            if eqs(p, m, addr_of!(F_VERSION) as *const u8, F_VERSION_LEN) {
+                fs_reply(addr_of!(R_VERSION) as *const u8, R_VERSION_LEN);
+            } else if eqs(p, m, addr_of!(F_LIMITS) as *const u8, F_LIMITS_LEN) {
+                fs_reply(addr_of!(R_LIMITS) as *const u8, R_LIMITS_LEN);
+            } else if eqs(p, m, addr_of!(F_MHELLO) as *const u8, F_MHELLO_LEN) {
+                fs_reply(addr_of!(R_MHELLO) as *const u8, R_MHELLO_LEN);
+            } else if eqs(p, m, addr_of!(F_MCOUNTER) as *const u8, F_MCOUNTER_LEN) {
+                fs_reply(addr_of!(R_MCOUNTER) as *const u8, R_MCOUNTER_LEN);
+            } else if eqs(p, m, addr_of!(F_MFAULT) as *const u8, F_MFAULT_LEN) {
+                fs_reply(addr_of!(R_MFAULT) as *const u8, R_MFAULT_LEN);
+            } else if eqs(p, m, addr_of!(F_ABOUT) as *const u8, F_ABOUT_LEN) {
+                fs_reply(addr_of!(R_ABOUT) as *const u8, R_ABOUT_LEN);
+            } else {
+                fs_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+            }
+        } else {
+            fs_reply(addr_of!(E_BADPATH) as *const u8, E_BADPATH_LEN);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
 // shell_service (U-mode): parse + execute (AXIOM-SHELL-003..009)
 // ---------------------------------------------------------------------
 
@@ -660,6 +799,9 @@ umsg!(C_MEMORY, C_MEMORY_LEN, b"memory");
 umsg!(C_UPTIME, C_UPTIME_LEN, b"uptime");
 umsg!(C_EVENTS, C_EVENTS_LEN, b"events");
 umsg!(C_RUN_DEMO, C_RUN_DEMO_LEN, b"run demo");
+umsg!(C_LS, C_LS_LEN, b"ls");
+umsg!(C_LSSP, C_LSSP_LEN, b"ls ");
+umsg!(C_CATSP, C_CATSP_LEN, b"cat ");
 umsg!(C_APPS, C_APPS_LEN, b"apps");
 umsg!(C_APPINFO, C_APPINFO_LEN, b"app info ");
 umsg!(C_RUNSP, C_RUNSP_LEN, b"run ");
@@ -693,6 +835,51 @@ fn shell_app_forward(bp: *mut u8, n: usize, rp: *mut u8) {
     }
 }
 
+/// Build `LS <path>` / `CAT <path>` in a stack buffer, forward it to
+/// fs_service on the shell's fs capability (slot 5), print the reply
+/// verbatim (docs/28 §6). `tail_at` = where the path starts in the
+/// input line, or n (== `ls` alone -> path `/`).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn shell_fs_cmd(bp: *const u8, n: usize, tail_at: usize, cat: bool, qp: *mut u8, rp: *mut u8) {
+    let (pfx, pfx_len): (*const u8, usize) = if cat {
+        (addr_of!(P_CAT) as *const u8, P_CAT_LEN)
+    } else {
+        (addr_of!(P_LS) as *const u8, P_LS_LEN)
+    };
+    let mut q = 0usize;
+    while q < pfx_len {
+        // SAFETY: q < pfx_len <= 4, request buffer is 64 bytes.
+        unsafe { write_volatile(qp.add(q), read_volatile(pfx.add(q))) };
+        q += 1;
+    }
+    if tail_at >= n {
+        // bare `ls` -> `LS /`
+        // SAFETY: q < 64.
+        unsafe { write_volatile(qp.add(q), b'/') };
+        q += 1;
+    } else {
+        let mut i = tail_at;
+        while i < n && q < 63 {
+            // SAFETY: bounded copy inside both 64-byte buffers.
+            unsafe { write_volatile(qp.add(q), read_volatile(bp.add(i))) };
+            i += 1;
+            q += 1;
+        }
+    }
+    if sys3(SYS_SEND, 5, qp as u64, q as u64) < 0 {
+        uput!(M_ERR, M_ERR_LEN);
+        return;
+    }
+    let r = sys3(SYS_RECV, 5, rp as u64, 64);
+    if r > 0 {
+        uwrite_ptr(rp, r as usize);
+        uput!(M_NL, M_NL_LEN);
+    } else {
+        uput!(M_ERR, M_ERR_LEN);
+    }
+}
+
 #[link_section = ".user.text"]
 #[inline(never)]
 fn shell_info(kind: u64, op: *mut u8) {
@@ -710,6 +897,8 @@ extern "C" fn shell_body() -> ! {
     let bp = addr_of_mut!(buf) as *mut u8;
     let mut out = MaybeUninit::<[u8; 640]>::uninit();
     let op = addr_of_mut!(out) as *mut u8;
+    let mut req = MaybeUninit::<[u8; 64]>::uninit();
+    let qp = addr_of_mut!(req) as *mut u8;
 
     uput!(M_BANNER, M_BANNER_LEN);
     loop {
@@ -742,6 +931,12 @@ extern "C" fn shell_body() -> ! {
             if sys3(SYS_TASK_START, SVC_FAULTY, 0, 0) < 0 {
                 uput!(M_ERR, M_ERR_LEN);
             }
+        } else if is_cmd!(bp, n, C_LS, C_LS_LEN) {
+            shell_fs_cmd(bp, n, n, false, qp, op);
+        } else if starts_with(bp, n, addr_of!(C_LSSP) as *const u8, C_LSSP_LEN) {
+            shell_fs_cmd(bp, n, C_LSSP_LEN, false, qp, op);
+        } else if starts_with(bp, n, addr_of!(C_CATSP) as *const u8, C_CATSP_LEN) {
+            shell_fs_cmd(bp, n, C_CATSP_LEN, true, qp, op);
         } else if is_cmd!(bp, n, C_APPS, C_APPS_LEN)
             || starts_with(bp, n, addr_of!(C_APPINFO) as *const u8, C_APPINFO_LEN)
             || starts_with(bp, n, addr_of!(C_RUNSP) as *const u8, C_RUNSP_LEN)
