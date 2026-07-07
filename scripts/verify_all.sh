@@ -34,7 +34,8 @@ for t in boot_smoke_test \
          full_fault_containment_demo_qemu_test \
          os_shell_qemu_test \
          app_loader_qemu_test \
-         readonly_fs_qemu_test; do
+         readonly_fs_qemu_test \
+         storage_service_qemu_test; do
     run "$t" "./tests/$t.sh"
 done
 
