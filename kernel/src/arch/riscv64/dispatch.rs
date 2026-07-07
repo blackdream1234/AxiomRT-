@@ -233,8 +233,9 @@ const EMPTY_TCB: Tcb = Tcb {
     stack_top_va: 0,
 };
 
-/// Maximum on-target tasks (10 since the app phase, docs/27 §2).
-pub const MAX_TASKS: usize = 12;
+/// Maximum on-target tasks (14 since the driver phase: 12 + the
+/// driver_manager and block_driver_service slots, docs/31 §4/§5).
+pub const MAX_TASKS: usize = 14;
 
 static mut TASKS: [Tcb; MAX_TASKS] = [EMPTY_TCB; MAX_TASKS];
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
@@ -391,6 +392,22 @@ fn ep_get(id: u32) -> Ep {
 fn ep_set(id: u32, e: Ep) {
     // SAFETY: single-hart, non-reentrant dispatcher state.
     unsafe { (*addr_of_mut!(ENDPOINTS))[id as usize] = e };
+}
+
+/// Clear every rendezvous wait state owned by task `slot`. Called when
+/// a task is killed or re-armed: a restarted task must never receive
+/// into the buffers of its previous life (docs/31 §3 Restarted).
+fn ep_clear_for_task(slot: usize) {
+    let mut id = 0usize;
+    while id < NUM_ENDPOINTS {
+        match ep_get(id as u32) {
+            Ep::SenderWaiting { tid, .. } | Ep::ReceiverWaiting { tid, .. } if tid == slot => {
+                ep_set(id as u32, Ep::Idle);
+            }
+            _ => {}
+        }
+        id += 1;
+    }
 }
 
 /// Select the highest-priority Ready task, round-robin among equals
@@ -1700,6 +1717,7 @@ fn start_service(index: usize) -> i64 {
             f.sstatus = (read_sstatus() & !SSTATUS_SPP) | SSTATUS_SPIE;
             tasks[def.slot].frame = f;
             tasks[def.slot].pending_ipc = None;
+            ep_clear_for_task(def.slot);
             tasks[def.slot].state = RtState::Ready;
         }
         _ => return ERR_NO_SLOT,
@@ -1947,6 +1965,7 @@ fn sys_task_kill(frame: &mut TrapFrame) {
     }
     tasks[slot].state = RtState::Killed;
     tasks[slot].pending_ipc = None;
+    ep_clear_for_task(slot);
     irq_drop_for_task(slot);
     ring_push(EV_KILLED, slot);
     emit("TASK_KILLED task=", tasks[slot].name);
@@ -1986,6 +2005,7 @@ fn sys_task_restart(frame: &mut TrapFrame) {
     f.sstatus = (read_sstatus() & !SSTATUS_SPP) | SSTATUS_SPIE;
     tasks[slot].frame = f;
     tasks[slot].pending_ipc = None;
+    ep_clear_for_task(slot);
     tasks[slot].state = RtState::Ready;
     ring_push(EV_RESTARTED, slot);
     emit("TASK_RESTARTED task=", tasks[slot].name);

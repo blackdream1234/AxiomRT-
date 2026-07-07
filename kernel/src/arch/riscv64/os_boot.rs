@@ -19,9 +19,9 @@ use core::mem::MaybeUninit;
 use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 
 use crate::dispatch::{
-    self, cap_console, cap_control, cap_endpoint, cap_info, Cap, ServiceDef, CAP_RIGHT_CONTROL,
-    CAP_RIGHT_FS_LIST, CAP_RIGHT_FS_READ, CAP_RIGHT_RECV, CAP_RIGHT_SEND, CAP_RIGHT_STORAGE_INFO,
-    CAP_RIGHT_STORAGE_READ,
+    self, cap_console, cap_control, cap_device, cap_endpoint, cap_info, Cap, ServiceDef,
+    CAP_RIGHT_CONTROL, CAP_RIGHT_FS_LIST, CAP_RIGHT_FS_READ, CAP_RIGHT_RECV, CAP_RIGHT_SEND,
+    CAP_RIGHT_STORAGE_INFO, CAP_RIGHT_STORAGE_READ, DEV_RIGHT_DRIVER_CONTROL,
 };
 use crate::paging_hw;
 use crate::timer;
@@ -39,6 +39,7 @@ const SYS_INFO: u64 = 11;
 const SYS_TASK_KILL: u64 = 12;
 const SYS_TASK_RESTART: u64 = 13;
 const SYS_SHUTDOWN: u64 = 14;
+const SYS_IRQ_RAISE: u64 = 20;
 
 // Endpoints (docs/25 §5): 1 = console→shell line channel, 2 = fault
 // channel, 3 = event channel (as v0.8).
@@ -52,6 +53,13 @@ const EP_APP: u32 = 0;
 const EP_FS: u32 = 4;
 /// Storage channel (docs/29 §4).
 const EP_STOR: u32 = 5;
+/// Shell <-> driver_manager channel (docs/31 §4).
+const EP_DRV: u32 = 6;
+/// driver_manager <-> block_driver_service command channel (docs/31 §5).
+const EP_BLK: u32 = 7;
+/// Driver IRQ event endpoint (docs/31 §9).
+#[allow(dead_code)] // recv capability minted by AXIOM-DRV-007
+const EP_IRQ: u32 = 8;
 
 /// Service-table index of the faulty demo task (`run demo`).
 const SVC_FAULTY: u64 = 4;
@@ -59,6 +67,12 @@ const SVC_FAULTY: u64 = 4;
 const APP_HELLO: u64 = 6;
 const APP_FAULT: u64 = 7;
 const APP_COUNTER: u64 = 8;
+/// Service-table index of block_driver_service (docs/31 §5; the entry
+/// lands with AXIOM-DRV-007 — until then the manager's start attempt
+/// fails safely and the driver reports state=stopped).
+const TBL_BLOCK_DRIVER: u64 = 12;
+/// TCB slot of block_driver_service (sys_task_restart takes slots).
+const SLOT_BLOCK_DRIVER: u64 = 13;
 
 // ---------------------------------------------------------------------
 // Boot (S-mode)
@@ -66,7 +80,9 @@ const APP_COUNTER: u64 = 8;
 
 #[repr(C, align(4096))]
 struct Stack([u8; 4096]);
-static mut OS_STACKS: [Stack; 12] = [
+static mut OS_STACKS: [Stack; 14] = [
+    Stack([0; 4096]),
+    Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
@@ -90,7 +106,7 @@ const NO_CAPS: [Option<Cap>; dispatch::CAPS_PER_TASK] = [None; dispatch::CAPS_PE
 /// Service table (docs/25 §3). Entry addresses, stacks, and capability
 /// grants are runtime values, patched once by `os_boot` before
 /// dispatching; the rest is fixed here.
-static mut TABLE: [ServiceDef; 11] = [
+static mut TABLE: [ServiceDef; 12] = [
     ServiceDef {
         name: "supervisor_service",
         entry: 0,
@@ -179,6 +195,14 @@ static mut TABLE: [ServiceDef; 11] = [
         slot: 11,
         caps: NO_CAPS,
     },
+    ServiceDef {
+        name: "driver_manager",
+        entry: 0,
+        stack_phys: 0,
+        prio: 2,
+        slot: 12,
+        caps: NO_CAPS,
+    },
 ];
 
 fn stack_phys(i: usize) -> u64 {
@@ -191,7 +215,7 @@ fn stack_phys(i: usize) -> u64 {
 /// timer, dispatch.
 pub fn os_boot() -> ! {
     // SAFETY: single hart, boot-time exclusive access, before start().
-    let table: &'static mut [ServiceDef; 11] = unsafe { &mut *addr_of_mut!(TABLE) };
+    let table: &'static mut [ServiceDef; 12] = unsafe { &mut *addr_of_mut!(TABLE) };
     table[0].entry = supervisor_body as *const () as u64;
     table[0].stack_phys = stack_phys(1);
     table[0].caps[0] = Some(cap_endpoint(EP_FAULT, CAP_RIGHT_RECV | CAP_RIGHT_CONTROL));
@@ -250,6 +274,18 @@ pub fn os_boot() -> ! {
     table[10].entry = storage_body as *const () as u64;
     table[10].stack_phys = stack_phys(11);
     table[10].caps[0] = Some(cap_endpoint(EP_STOR, CAP_RIGHT_RECV | CAP_RIGHT_SEND));
+    // driver_manager (docs/31 §4): shell channel, driver command
+    // channel, task control (start/restart drivers), console (driver
+    // lifecycle evidence lines), and driver_control on block0 — the
+    // synthetic IRQ injection / liveness probe. Deliberately NO mmio,
+    // dma, or irq_receive rights (docs/31 §10).
+    table[11].entry = driver_manager_body as *const () as u64;
+    table[11].stack_phys = stack_phys(12);
+    table[11].caps[0] = Some(cap_endpoint(EP_DRV, CAP_RIGHT_RECV | CAP_RIGHT_SEND));
+    table[11].caps[1] = Some(cap_endpoint(EP_BLK, CAP_RIGHT_SEND | CAP_RIGHT_RECV));
+    table[11].caps[2] = Some(cap_control());
+    table[11].caps[3] = Some(cap_console(CAP_RIGHT_SEND));
+    table[11].caps[4] = Some(cap_device(0, DEV_RIGHT_DRIVER_CONTROL));
 
     // SAFETY: boot-time, single hart, called once.
     unsafe { dispatch::set_service_table(table) };
@@ -417,6 +453,9 @@ extern "C" fn init_body() -> ! {
     sys3(SYS_TASK_START, 9, 0, 0);
     // Storage service (table index 10, docs/29).
     sys3(SYS_TASK_START, 10, 0, 0);
+    // Driver manager (table index 11, docs/31 §4); starting drivers is
+    // its policy, not init's.
+    sys3(SYS_TASK_START, 11, 0, 0);
     sys3(SYS_EXIT, 0, 0, 0);
     loop {
         sys3(SYS_YIELD, 0, 0, 0);
@@ -954,6 +993,214 @@ extern "C" fn storage_body() -> ! {
             }
         } else {
             sys3(SYS_SEND, 0, addr_of!(S_E_MAL) as u64, S_E_MAL_LEN as u64);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// driver_manager (U-mode): driver lifecycle policy (AXIOM-DRV-006)
+// ---------------------------------------------------------------------
+
+// Driver lifecycle evidence (console) and shell replies (IPC ≤ 64 B).
+umsg!(
+    DM_STARTED,
+    DM_STARTED_LEN,
+    b"DRIVER started=block_driver_service\n"
+);
+umsg!(
+    DM_STARTFAIL,
+    DM_STARTFAIL_LEN,
+    b"DRIVER start_failed=block_driver_service\n"
+);
+umsg!(
+    DM_RESTARTED,
+    DM_RESTARTED_LEN,
+    b"DRIVER restarted=block_driver_service\n"
+);
+umsg!(
+    DM_OBSERVED,
+    DM_OBSERVED_LEN,
+    b"DRIVER_MANAGER observed=fault driver=block_driver_service\n"
+);
+umsg!(
+    DM_LINE_RUN,
+    DM_LINE_RUN_LEN,
+    b"driver name=block_driver_service state=running kind=block_skeleton\n"
+);
+umsg!(
+    DM_LINE_FLT,
+    DM_LINE_FLT_LEN,
+    b"driver name=block_driver_service state=faulted kind=block_skeleton\n"
+);
+umsg!(
+    DM_LINE_STOP,
+    DM_LINE_STOP_LEN,
+    b"driver name=block_driver_service state=stopped kind=block_skeleton\n"
+);
+umsg!(DMR_RUN, DMR_RUN_LEN, b"block_driver_service running");
+umsg!(DMR_FLT, DMR_FLT_LEN, b"block_driver_service faulted");
+umsg!(DMR_STOP, DMR_STOP_LEN, b"block_driver_service stopped");
+umsg!(
+    DMR_INFO_FLT,
+    DMR_INFO_FLT_LEN,
+    b"kind=block_skeleton state=faulted"
+);
+umsg!(
+    DMR_INFO_STOP,
+    DMR_INFO_STOP_LEN,
+    b"kind=block_skeleton state=stopped"
+);
+umsg!(DMR_RESTARTED, DMR_RESTARTED_LEN, b"restarted");
+umsg!(
+    DMR_RESTART_ERR,
+    DMR_RESTART_ERR_LEN,
+    b"error: cannot restart"
+);
+umsg!(DMR_FAULTED, DMR_FAULTED_LEN, b"faulted (contained)");
+umsg!(DMR_FAULTREQ, DMR_FAULTREQ_LEN, b"fault requested");
+umsg!(DMR_NOTRUN, DMR_NOTRUN_LEN, b"driver not running");
+umsg!(DMR_BADCMD, DMR_BADCMD_LEN, b"unknown driver command");
+// Driver command protocol (docs/31 §5) and shell lines (docs/31 §4).
+umsg!(DM_Q_STATUS, DM_Q_STATUS_LEN, b"STATUS");
+umsg!(DM_Q_FAULT, DM_Q_FAULT_LEN, b"FAULT");
+umsg!(DMC_LIST, DMC_LIST_LEN, b"drivers");
+umsg!(DMC_INFO, DMC_INFO_LEN, b"driver info block");
+umsg!(DMC_RESTART, DMC_RESTART_LEN, b"driver restart block");
+umsg!(DMC_FAULT, DMC_FAULT_LEN, b"driver fault block");
+
+/// One bounded reply to the shell over the driver-manager channel.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn dm_reply(p: *const u8, len: usize) {
+    sys3(SYS_SEND, 0, p as u64, len as u64);
+}
+
+/// `drivers`: print the full state line (console) and reply the short
+/// one (IPC). Branch chain with a call per arm (docs/25 §2 rules).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn dm_list(st: u8) {
+    if st == 1 {
+        uput!(DM_LINE_RUN, DM_LINE_RUN_LEN);
+        dm_reply(addr_of!(DMR_RUN) as *const u8, DMR_RUN_LEN);
+    } else if st == 2 {
+        uput!(DM_LINE_FLT, DM_LINE_FLT_LEN);
+        dm_reply(addr_of!(DMR_FLT) as *const u8, DMR_FLT_LEN);
+    } else {
+        uput!(DM_LINE_STOP, DM_LINE_STOP_LEN);
+        dm_reply(addr_of!(DMR_STOP) as *const u8, DMR_STOP_LEN);
+    }
+}
+
+/// `driver info block`: a running driver answers for itself (nested
+/// STATUS query over EP_BLK, reply forwarded verbatim); a dead or
+/// stopped driver is answered from the manager's tracked state — the
+/// manager never IPCs a driver it believes dead (docs/31 §4).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn dm_info(st: u8, sp: *mut u8) {
+    if st == 1 {
+        if sys3(
+            SYS_SEND,
+            1,
+            addr_of!(DM_Q_STATUS) as u64,
+            DM_Q_STATUS_LEN as u64,
+        ) < 0
+        {
+            dm_reply(addr_of!(DMR_INFO_STOP) as *const u8, DMR_INFO_STOP_LEN);
+            return;
+        }
+        let sr = sys3(SYS_RECV, 1, sp as u64, 64);
+        if sr > 0 {
+            dm_reply(sp as *const u8, sr as usize);
+        } else {
+            dm_reply(addr_of!(DMR_INFO_STOP) as *const u8, DMR_INFO_STOP_LEN);
+        }
+    } else if st == 2 {
+        dm_reply(addr_of!(DMR_INFO_FLT) as *const u8, DMR_INFO_FLT_LEN);
+    } else {
+        dm_reply(addr_of!(DMR_INFO_STOP) as *const u8, DMR_INFO_STOP_LEN);
+    }
+}
+
+/// driver_manager main loop (docs/31 §4): owns driver lifecycle
+/// policy. Starts the block driver, tracks its state (0 = stopped,
+/// 1 = running, 2 = faulted), answers the shell's driver lines,
+/// observes driver death through the synthetic-IRQ liveness probe
+/// (docs/31 §9), and requests restarts through its control capability.
+/// It never parses device registers or block protocol.
+#[link_section = ".user.text"]
+extern "C" fn driver_manager_body() -> ! {
+    let mut buf = MaybeUninit::<[u8; 64]>::uninit();
+    let bp = addr_of_mut!(buf) as *mut u8;
+    let mut sbuf = MaybeUninit::<[u8; 64]>::uninit();
+    let sp = addr_of_mut!(sbuf) as *mut u8;
+    let mut st: u8 = 0;
+    if sys3(SYS_TASK_START, TBL_BLOCK_DRIVER, 0, 0) >= 0 {
+        st = 1;
+        uput!(DM_STARTED, DM_STARTED_LEN);
+        // Boot attention event: the synthetic stand-in for the device's
+        // first interrupt; the driver consumes it in its start sequence.
+        sys3(SYS_IRQ_RAISE, 4, 0, 0);
+    } else {
+        uput!(DM_STARTFAIL, DM_STARTFAIL_LEN);
+    }
+    loop {
+        let r = sys3(SYS_RECV, 0, bp as u64, 64);
+        if r <= 0 {
+            continue;
+        }
+        let n = r as usize;
+        if eqs(bp, n, addr_of!(DMC_LIST) as *const u8, DMC_LIST_LEN) {
+            dm_list(st);
+        } else if eqs(bp, n, addr_of!(DMC_INFO) as *const u8, DMC_INFO_LEN) {
+            dm_info(st, sp);
+        } else if eqs(bp, n, addr_of!(DMC_RESTART) as *const u8, DMC_RESTART_LEN) {
+            if sys3(SYS_TASK_RESTART, SLOT_BLOCK_DRIVER, 0, 0) < 0 {
+                dm_reply(addr_of!(DMR_RESTART_ERR) as *const u8, DMR_RESTART_ERR_LEN);
+            } else {
+                st = 1;
+                uput!(DM_RESTARTED, DM_RESTARTED_LEN);
+                sys3(SYS_IRQ_RAISE, 4, 0, 0); // re-arm attention event
+                dm_reply(addr_of!(DMR_RESTARTED) as *const u8, DMR_RESTARTED_LEN);
+            }
+        } else if eqs(bp, n, addr_of!(DMC_FAULT) as *const u8, DMC_FAULT_LEN) {
+            // Never IPC a driver believed dead (the send would block
+            // forever on an endpoint nobody serves); short-circuit
+            // guards the FAULT command behind the tracked state.
+            if st != 1
+                || sys3(
+                    SYS_SEND,
+                    1,
+                    addr_of!(DM_Q_FAULT) as u64,
+                    DM_Q_FAULT_LEN as u64,
+                ) < 0
+            {
+                dm_reply(addr_of!(DMR_NOTRUN) as *const u8, DMR_NOTRUN_LEN);
+            } else {
+                // Bounded liveness probe: a dropped raise (error result)
+                // means the driver is dead — the manager's observation
+                // of the contained fault (docs/31 §9).
+                let mut k: u32 = 0;
+                let mut dead = false;
+                while k < 16 {
+                    sys3(SYS_YIELD, 0, 0, 0);
+                    if sys3(SYS_IRQ_RAISE, 4, 0, 0) < 0 {
+                        dead = true;
+                        break;
+                    }
+                    k += 1;
+                }
+                if dead {
+                    st = 2;
+                    uput!(DM_OBSERVED, DM_OBSERVED_LEN);
+                    dm_reply(addr_of!(DMR_FAULTED) as *const u8, DMR_FAULTED_LEN);
+                } else {
+                    dm_reply(addr_of!(DMR_FAULTREQ) as *const u8, DMR_FAULTREQ_LEN);
+                }
+            }
+        } else {
+            dm_reply(addr_of!(DMR_BADCMD) as *const u8, DMR_BADCMD_LEN);
         }
     }
 }

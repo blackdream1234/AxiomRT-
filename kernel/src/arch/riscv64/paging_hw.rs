@@ -38,8 +38,9 @@ const VIRTIO_MMIO0_PAGE: u64 = 0x1000_1000;
 /// Lives in .bss, therefore inside the R+W data span it maps for itself.
 static mut KERNEL_TABLES: [Table; ARENA_TABLES] = [Table::zeroed(); ARENA_TABLES];
 
-/// Maximum concurrent user address spaces on target (v0.3).
-pub const MAX_USER_AS: usize = 12;
+/// Maximum concurrent user address spaces on target (14 since the
+/// driver phase, docs/31 §4/§5).
+pub const MAX_USER_AS: usize = 14;
 
 /// Static user table arenas, one per user address space.
 static mut USER_TABLES: [[Table; ARENA_TABLES]; MAX_USER_AS] =
