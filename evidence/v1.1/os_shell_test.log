@@ -1,0 +1,23 @@
+building os_boot kernel
+    Finished `release` profile [optimized] target(s) in 0.00s
+booting QEMU (scripted shell session)
+ok: found "AxiomRT kernel booted"
+ok: found "MMU status=enabled mode=sv39 scope=kernel"
+ok: found "TASK_STARTED task=init_service"
+ok: found "SERVICE started=supervisor_service"
+ok: found "SERVICE started=logger_service"
+ok: found "SERVICE started=console_service"
+ok: found "SERVICE started=shell_service"
+ok: found "axiom> "
+ok: found "commands: help version tasks faults ipc caps memory uptime events"
+ok: found "task idx=4 name=shell_service prio=3 state=running"
+ok: found "uptime ticks="
+ok: found "SERVICE started=faulty_task"
+ok: found "CAP_DENIED task=faulty_task reason=no_valid_capability"
+ok: found "FAULT type=WatchdogTimeout task=faulty_task"
+ok: found "CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive"
+ok: found "RECOVERY_APPLIED policy=Kill"
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
+restoring default build
+PASS: OS shell test
