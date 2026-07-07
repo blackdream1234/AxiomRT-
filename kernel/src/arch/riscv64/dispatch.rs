@@ -1943,6 +1943,17 @@ fn sys_info(frame: &mut TrapFrame) {
             out.push_str(" tick_interval=100000 timebase_hz=10000000\n");
         }
         6 => info_ring(&mut out, false),
+        // Single-task state by slot (a3), docs/32 §7: read-only
+        // introspection so the loader can report Running/Exited/
+        // Faulted without the kernel parsing any app name.
+        7 => {
+            let slot = frame.regs[12] as usize; // a3
+            if slot >= MAX_TASKS {
+                frame.set_a0(ERR_INVALID_ARG);
+                return;
+            }
+            out.push_str(state_name(tasks_mut()[slot].state));
+        }
         _ => {
             frame.set_a0(ERR_INVALID_ARG);
             return;

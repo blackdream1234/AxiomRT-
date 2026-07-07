@@ -276,6 +276,9 @@ pub fn os_boot() -> ! {
         CAP_RIGHT_SEND | CAP_RIGHT_RECV | CAP_RIGHT_FS_READ,
     ));
     table[5].caps[3] = Some(cap_console(CAP_RIGHT_SEND));
+    // Read-only introspection: the loader resolves a run app's state
+    // (running/exited/faulted) via sys_info kind 7 (docs/32 §7).
+    table[5].caps[4] = Some(cap_info());
     // Applications (docs/27 §5): manifest capability grants only.
     table[6].entry = hello_body as *const () as u64;
     table[6].stack_phys = stack_phys(7);
@@ -672,6 +675,17 @@ umsg!(R_EBADIMG, R_EBADIMG_LEN, b"ERR bad_image");
 umsg!(R_EBADSUM, R_EBADSUM_LEN, b"ERR bad_checksum");
 umsg!(R_EDENCAP, R_EDENCAP_LEN, b"ERR denied_capability");
 umsg!(RP_LOADED, RP_LOADED_LEN, b"OK loaded ");
+umsg!(R_ELOADED, R_ELOADED_LEN, b"ERR already_loaded");
+umsg!(RP_RUNNING, RP_RUNNING_LEN, b"OK running ");
+umsg!(RP_UNLOAD, RP_UNLOAD_LEN, b"OK unloaded ");
+// Loaded-app state vocabulary (docs/32; AXIOM-LOAD-007).
+umsg!(ST_AVAIL, ST_AVAIL_LEN, b"state=available");
+umsg!(ST_LOADED, ST_LOADED_LEN, b"state=loaded");
+umsg!(ST_RUN, ST_RUN_LEN, b"state=running");
+umsg!(ST_EXITED, ST_EXITED_LEN, b"state=exited");
+umsg!(ST_FAULTED, ST_FAULTED_LEN, b"state=faulted");
+umsg!(KW_KILLED, KW_KILLED_LEN, b"killed");
+umsg!(KW_FAULTED, KW_FAULTED_LEN, b"faulted");
 // Record grammar tokens (docs/32 §3): magic+version prefix and the
 // v1.6 capability vocabulary.
 umsg!(LD_MAGIC, LD_MAGIC_LEN, b"AXAPP1 ");
@@ -925,7 +939,15 @@ fn ld_reject(name: *const u8, nl: usize, word: *const u8, wl: usize, reply: *con
 /// loaded.
 #[link_section = ".user.text"]
 #[inline(never)]
-fn ld_load(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8) {
+fn ld_load(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8, st: *mut u8) {
+    let id = ld_app_id(name, nl);
+    // Available -> Loaded only (docs/32; repeated loads are
+    // deterministic: unload first).
+    // SAFETY: id < 3 when not MAX; st is the 4-byte state array.
+    if id != u64::MAX && unsafe { read_volatile(st.add(id as usize)) } != 0 {
+        app_reply(addr_of!(R_ELOADED) as *const u8, R_ELOADED_LEN);
+        return;
+    }
     let rr = ld_fetch(name, nl, qp, rp);
     if rr < 0 {
         app_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
@@ -939,7 +961,8 @@ fn ld_load(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8) {
         uwrite_ptr(name, nl);
         uput!(LD_APP_SUF, LD_APP_SUF_LEN);
         uput!(M_NL, M_NL_LEN);
-        ld_mark_loaded(name, nl);
+        // SAFETY: code 0 implies a known app (rule 7), so id < 3.
+        unsafe { write_volatile(st.add(id as usize), 1) };
         ld_reply_name(
             addr_of!(RP_LOADED) as *const u8,
             RP_LOADED_LEN,
@@ -988,31 +1011,137 @@ fn ld_load(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8) {
     }
 }
 
-/// Record a successful load (loaded-state persistence lands with the
-/// AXIOM-LOAD-007 state machine; until then loads are stateless).
+/// Loaded-app id: 0 = hello, 1 = counter, 2 = fault_demo;
+/// u64::MAX = not a runnable app (docs/32 §6 rule 7).
 #[link_section = ".user.text"]
 #[inline(never)]
-fn ld_mark_loaded(_name: *const u8, _nl: usize) {}
-
-/// `APP_RUN <name>` (state machine lands with AXIOM-LOAD-007).
-#[link_section = ".user.text"]
-#[inline(never)]
-fn ld_run(_name: *const u8, _nl: usize, _qp: *mut u8) {
-    app_reply(addr_of!(R_ENOTLD) as *const u8, R_ENOTLD_LEN);
+fn ld_app_id(name: *const u8, nl: usize) -> u64 {
+    if eqs(name, nl, addr_of!(A_HELLO) as *const u8, A_HELLO_LEN) {
+        0
+    } else if eqs(name, nl, addr_of!(A_COUNTER) as *const u8, A_COUNTER_LEN) {
+        1
+    } else if eqs(name, nl, addr_of!(A_FAULT) as *const u8, A_FAULT_LEN) {
+        2
+    } else {
+        u64::MAX
+    }
 }
 
-/// `APP_UNLOAD <name>` (state machine lands with AXIOM-LOAD-007).
+/// Service-table index of a loaded-app id (docs/27 §5).
 #[link_section = ".user.text"]
 #[inline(never)]
-fn ld_unload(_name: *const u8, _nl: usize, _qp: *mut u8) {
-    app_reply(addr_of!(R_ENOTLD) as *const u8, R_ENOTLD_LEN);
+fn ld_tbl_idx(id: u64) -> u64 {
+    if id == 0 {
+        APP_HELLO
+    } else if id == 1 {
+        APP_COUNTER
+    } else {
+        APP_FAULT
+    }
 }
 
-/// `APP_STATE <name>` (state machine lands with AXIOM-LOAD-007).
+/// `APP_RUN <name>`: Loaded (or previously run) -> Running. Exited
+/// and Faulted apps stay loaded and may be re-run (the kernel re-arms
+/// the slot); repeated runs are deterministic (docs/33 §7).
 #[link_section = ".user.text"]
 #[inline(never)]
-fn ld_state(_name: *const u8, _nl: usize, _qp: *mut u8) {
-    app_reply(addr_of!(R_ENOTLD) as *const u8, R_ENOTLD_LEN);
+fn ld_run(name: *const u8, nl: usize, qp: *mut u8, st: *mut u8) {
+    let id = ld_app_id(name, nl);
+    if id == u64::MAX {
+        app_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+        return;
+    }
+    // SAFETY: id < 3; st is the 4-byte state array.
+    if unsafe { read_volatile(st.add(id as usize)) } == 0 {
+        app_reply(addr_of!(R_ENOTLD) as *const u8, R_ENOTLD_LEN);
+        return;
+    }
+    if sys3(SYS_TASK_START, ld_tbl_idx(id), 0, 0) < 0 {
+        app_reply(addr_of!(A_ERR) as *const u8, A_ERR_LEN);
+        return;
+    }
+    // SAFETY: id < 3.
+    unsafe { write_volatile(st.add(id as usize), 2) };
+    ld_reply_name(
+        addr_of!(RP_RUNNING) as *const u8,
+        RP_RUNNING_LEN,
+        name,
+        nl,
+        qp,
+    );
+}
+
+/// `APP_UNLOAD <name>`: any loaded state -> Available.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_unload(name: *const u8, nl: usize, qp: *mut u8, st: *mut u8) {
+    let id = ld_app_id(name, nl);
+    if id == u64::MAX {
+        app_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+        return;
+    }
+    // SAFETY: id < 3; st is the 4-byte state array.
+    if unsafe { read_volatile(st.add(id as usize)) } == 0 {
+        app_reply(addr_of!(R_ENOTLD) as *const u8, R_ENOTLD_LEN);
+        return;
+    }
+    // SAFETY: id < 3.
+    unsafe { write_volatile(st.add(id as usize), 0) };
+    ld_reply_name(
+        addr_of!(RP_UNLOAD) as *const u8,
+        RP_UNLOAD_LEN,
+        name,
+        nl,
+        qp,
+    );
+}
+
+/// `APP_STATE <name>`: loader view (available/loaded) or, once run,
+/// the kernel task state via read-only introspection (sys_info kind 7,
+/// docs/32 §7): killed maps to exited, faulted stays visible.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_state(name: *const u8, nl: usize, st: *mut u8) {
+    let id = ld_app_id(name, nl);
+    if id == u64::MAX {
+        app_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+        return;
+    }
+    // SAFETY: id < 3; st is the 4-byte state array.
+    let v = unsafe { read_volatile(st.add(id as usize)) };
+    if v == 0 {
+        app_reply(addr_of!(ST_AVAIL) as *const u8, ST_AVAIL_LEN);
+        return;
+    }
+    if v == 1 {
+        app_reply(addr_of!(ST_LOADED) as *const u8, ST_LOADED_LEN);
+        return;
+    }
+    let mut wb = MaybeUninit::<[u8; 16]>::uninit();
+    let wp = addr_of_mut!(wb) as *mut u8;
+    let slot = ld_tbl_idx(id) + 1; // TCB slot = table index + 1
+    let wn = sys4(SYS_INFO, 7, wp as u64, 16, slot);
+    if wn > 0
+        && eqs(
+            wp,
+            wn as usize,
+            addr_of!(KW_KILLED) as *const u8,
+            KW_KILLED_LEN,
+        )
+    {
+        app_reply(addr_of!(ST_EXITED) as *const u8, ST_EXITED_LEN);
+    } else if wn > 0
+        && eqs(
+            wp,
+            wn as usize,
+            addr_of!(KW_FAULTED) as *const u8,
+            KW_FAULTED_LEN,
+        )
+    {
+        app_reply(addr_of!(ST_FAULTED) as *const u8, ST_FAULTED_LEN);
+    } else {
+        app_reply(addr_of!(ST_RUN) as *const u8, ST_RUN_LEN);
+    }
 }
 
 /// `APP_INFO <name>` / legacy `app info <name>`: manifest one-liner.
@@ -1047,6 +1176,16 @@ extern "C" fn app_loader_body() -> ! {
     let qp = addr_of_mut!(req) as *mut u8;
     let mut rec = MaybeUninit::<[u8; 64]>::uninit();
     let rp = addr_of_mut!(rec) as *mut u8;
+    // Loaded-app states (AXIOM-LOAD-007): 0 = available, 1 = loaded,
+    // 2 = run requested (kernel resolves running/exited/faulted).
+    let mut stv = MaybeUninit::<[u8; 4]>::uninit();
+    let st = addr_of_mut!(stv) as *mut u8;
+    let mut k = 0usize;
+    while k < 4 {
+        // SAFETY: in-bounds init of the 4-byte state array.
+        unsafe { write_volatile(st.add(k), 0) };
+        k += 1;
+    }
     loop {
         let r = sys3(SYS_RECV, 0, bp as u64, 64);
         if r <= 0 {
@@ -1070,24 +1209,27 @@ extern "C" fn app_loader_body() -> ! {
                 n - PL_LOAD_LEN,
                 qp,
                 rp,
+                st,
             );
         } else if starts_with(bp, n, addr_of!(PL_RUN) as *const u8, PL_RUN_LEN) {
             ld_run(
                 unsafe { bp.add(PL_RUN_LEN) } as *const u8,
                 n - PL_RUN_LEN,
                 qp,
+                st,
             );
         } else if starts_with(bp, n, addr_of!(PL_UNLOAD) as *const u8, PL_UNLOAD_LEN) {
             ld_unload(
                 unsafe { bp.add(PL_UNLOAD_LEN) } as *const u8,
                 n - PL_UNLOAD_LEN,
                 qp,
+                st,
             );
         } else if starts_with(bp, n, addr_of!(PL_STATE) as *const u8, PL_STATE_LEN) {
             ld_state(
                 unsafe { bp.add(PL_STATE_LEN) } as *const u8,
                 n - PL_STATE_LEN,
-                qp,
+                st,
             );
         } else if starts_with(bp, n, addr_of!(C_RUNSP) as *const u8, C_RUNSP_LEN) {
             let p = unsafe { bp.add(C_RUNSP_LEN) } as *const u8;
