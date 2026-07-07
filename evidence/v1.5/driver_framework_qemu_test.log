@@ -1,0 +1,34 @@
+building os_boot kernel
+    Finished `release` profile [optimized] target(s) in 0.06s
+booting QEMU (scripted driver session)
+ok: found "axiom> "
+ok: found "DEVICE registered=block0 kind=block_skeleton"
+ok: found "IRQ registered source=block0 endpoint=driver_irq"
+ok: found "MMIO grant task=block_driver_service device=block0 region=virtio_mmio0"
+ok: found "DMA grant task=block_driver_service buffer=block0_dma size=4096"
+ok: found "DRIVER started=block_driver_service"
+ok: found "MMIO read task=block_driver_service device=block0 offset=0 value=0x74726976"
+ok: found "MMIO_DENIED task=block_driver_service reason=insufficient_rights"
+ok: found "IRQ delivered to=block_driver_service source=block0"
+ok: found "driver name=block_driver_service state=running kind=block_skeleton"
+ok: found "block_driver_service running"
+ok: found "kind=block_skeleton state=running mmio=granted irq=registered"
+ok: found "FAULT type=PageFault task=block_driver_service"
+ok: found "CONTAIN scope=user reason=user_access_unmapped action=faulted kernel=alive"
+ok: found "IPC delivered fault_event to=supervisor_task from=block_driver_service"
+ok: found "IRQ_DROPPED reason=driver_not_ready"
+ok: found "DRIVER_MANAGER observed=fault driver=block_driver_service"
+ok: found "block_driver_service faulted"
+ok: found "TASK_RESTARTED task=block_driver_service"
+ok: found "DRIVER restarted=block_driver_service"
+ok: found "caps task=shell_service endpoint console info control endpoint endpoint endpoint endpoint"
+ok: found "hello from app: hello"
+ok: found "MMIO_DENIED task=fault_demo reason=no_valid_capability"
+ok: found "DMA_DENIED task=fault_demo reason=no_valid_capability"
+ok: found "OK data=AxiomRT v1.4-storage-service evaluation stage"
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
+ok: no kernel panic
+ok: driver running again after fault
+restoring default build
+PASS: driver framework test
