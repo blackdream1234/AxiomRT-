@@ -21,7 +21,8 @@ use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 use crate::dispatch::{
     self, cap_console, cap_control, cap_device, cap_endpoint, cap_info, Cap, ServiceDef,
     CAP_RIGHT_CONTROL, CAP_RIGHT_FS_LIST, CAP_RIGHT_FS_READ, CAP_RIGHT_RECV, CAP_RIGHT_SEND,
-    CAP_RIGHT_STORAGE_INFO, CAP_RIGHT_STORAGE_READ, DEV_RIGHT_DRIVER_CONTROL,
+    CAP_RIGHT_STORAGE_INFO, CAP_RIGHT_STORAGE_READ, DEV_RIGHT_DMA_READ, DEV_RIGHT_DMA_WRITE,
+    DEV_RIGHT_DRIVER_CONTROL, DEV_RIGHT_INFO, DEV_RIGHT_IRQ_RECEIVE, DEV_RIGHT_MMIO_READ,
 };
 use crate::paging_hw;
 use crate::timer;
@@ -39,6 +40,11 @@ const SYS_INFO: u64 = 11;
 const SYS_TASK_KILL: u64 = 12;
 const SYS_TASK_RESTART: u64 = 13;
 const SYS_SHUTDOWN: u64 = 14;
+const SYS_DEVICE_INFO: u64 = 15;
+const SYS_MMIO_READ: u64 = 16;
+const SYS_MMIO_WRITE: u64 = 17;
+const SYS_DMA_READ: u64 = 18;
+const SYS_DMA_WRITE: u64 = 19;
 const SYS_IRQ_RAISE: u64 = 20;
 
 // Endpoints (docs/25 §5): 1 = console→shell line channel, 2 = fault
@@ -58,7 +64,6 @@ const EP_DRV: u32 = 6;
 /// driver_manager <-> block_driver_service command channel (docs/31 §5).
 const EP_BLK: u32 = 7;
 /// Driver IRQ event endpoint (docs/31 §9).
-#[allow(dead_code)] // recv capability minted by AXIOM-DRV-007
 const EP_IRQ: u32 = 8;
 
 /// Service-table index of the faulty demo task (`run demo`).
@@ -67,9 +72,7 @@ const SVC_FAULTY: u64 = 4;
 const APP_HELLO: u64 = 6;
 const APP_FAULT: u64 = 7;
 const APP_COUNTER: u64 = 8;
-/// Service-table index of block_driver_service (docs/31 §5; the entry
-/// lands with AXIOM-DRV-007 — until then the manager's start attempt
-/// fails safely and the driver reports state=stopped).
+/// Service-table index of block_driver_service (docs/31 §5).
 const TBL_BLOCK_DRIVER: u64 = 12;
 /// TCB slot of block_driver_service (sys_task_restart takes slots).
 const SLOT_BLOCK_DRIVER: u64 = 13;
@@ -106,7 +109,7 @@ const NO_CAPS: [Option<Cap>; dispatch::CAPS_PER_TASK] = [None; dispatch::CAPS_PE
 /// Service table (docs/25 §3). Entry addresses, stacks, and capability
 /// grants are runtime values, patched once by `os_boot` before
 /// dispatching; the rest is fixed here.
-static mut TABLE: [ServiceDef; 12] = [
+static mut TABLE: [ServiceDef; 13] = [
     ServiceDef {
         name: "supervisor_service",
         entry: 0,
@@ -203,6 +206,14 @@ static mut TABLE: [ServiceDef; 12] = [
         slot: 12,
         caps: NO_CAPS,
     },
+    ServiceDef {
+        name: "block_driver_service",
+        entry: 0,
+        stack_phys: 0,
+        prio: 2,
+        slot: 13,
+        caps: NO_CAPS,
+    },
 ];
 
 fn stack_phys(i: usize) -> u64 {
@@ -215,7 +226,7 @@ fn stack_phys(i: usize) -> u64 {
 /// timer, dispatch.
 pub fn os_boot() -> ! {
     // SAFETY: single hart, boot-time exclusive access, before start().
-    let table: &'static mut [ServiceDef; 12] = unsafe { &mut *addr_of_mut!(TABLE) };
+    let table: &'static mut [ServiceDef; 13] = unsafe { &mut *addr_of_mut!(TABLE) };
     table[0].entry = supervisor_body as *const () as u64;
     table[0].stack_phys = stack_phys(1);
     table[0].caps[0] = Some(cap_endpoint(EP_FAULT, CAP_RIGHT_RECV | CAP_RIGHT_CONTROL));
@@ -286,6 +297,22 @@ pub fn os_boot() -> ! {
     table[11].caps[2] = Some(cap_control());
     table[11].caps[3] = Some(cap_console(CAP_RIGHT_SEND));
     table[11].caps[4] = Some(cap_device(0, DEV_RIGHT_DRIVER_CONTROL));
+    // block_driver_service (docs/31 §5): command channel, device
+    // capability (info + mmio_read + dma r/w + irq_receive — NOT
+    // mmio_write, NOT driver_control: its one register-write attempt
+    // is denied on purpose), and the IRQ event endpoint.
+    table[12].entry = block_driver_body as *const () as u64;
+    table[12].stack_phys = stack_phys(13);
+    table[12].caps[0] = Some(cap_endpoint(EP_BLK, CAP_RIGHT_RECV | CAP_RIGHT_SEND));
+    table[12].caps[1] = Some(cap_device(
+        0,
+        DEV_RIGHT_INFO
+            | DEV_RIGHT_MMIO_READ
+            | DEV_RIGHT_DMA_READ
+            | DEV_RIGHT_DMA_WRITE
+            | DEV_RIGHT_IRQ_RECEIVE,
+    ));
+    table[12].caps[2] = Some(cap_endpoint(EP_IRQ, CAP_RIGHT_RECV));
 
     // SAFETY: boot-time, single hart, called once.
     unsafe { dispatch::set_service_table(table) };
@@ -337,6 +364,26 @@ fn sys3(num: u64, a0: u64, a1: u64, a2: u64) -> i64 {
             inlateout("a0") a0 => ret,
             in("a1") a1,
             in("a2") a2,
+            in("a7") num,
+            options(nostack)
+        );
+    }
+    ret
+}
+
+/// Four-argument syscall (MMIO/DMA writes carry a value in a3).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn sys4(num: u64, a0: u64, a1: u64, a2: u64, a3: u64) -> i64 {
+    let ret: i64;
+    // SAFETY: U-mode ecall; the kernel validates every argument.
+    unsafe {
+        core::arch::asm!(
+            "ecall",
+            inlateout("a0") a0 => ret,
+            in("a1") a1,
+            in("a2") a2,
+            in("a3") a3,
             in("a7") num,
             options(nostack)
         );
@@ -695,11 +742,15 @@ extern "C" fn counter_body() -> ! {
     }
 }
 
-/// fault_demo: unauthorized console write (denied: zero capabilities),
-/// then CPU exhaustion; contained by the watchdog, killed by the
-/// supervisor, while shell and console keep running.
+/// fault_demo: unauthorized device probes and console write (all
+/// denied: zero capabilities — MMIO_DENIED / DMA_DENIED / CAP_DENIED
+/// evidence, docs/31 §10), then CPU exhaustion; contained by the
+/// watchdog, killed by the supervisor, while shell and console keep
+/// running.
 #[link_section = ".user.text"]
 extern "C" fn fault_demo_body() -> ! {
+    sys3(SYS_MMIO_READ, 0, 0, 4);
+    sys3(SYS_DMA_READ, 0, 0, 1);
     sys3(
         SYS_CON_WRITE,
         addr_of!(M_HELLO_OUT) as *const u8 as u64,
@@ -993,6 +1044,68 @@ extern "C" fn storage_body() -> ! {
             }
         } else {
             sys3(SYS_SEND, 0, addr_of!(S_E_MAL) as u64, S_E_MAL_LEN as u64);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// block_driver_service (U-mode): driver skeleton (AXIOM-DRV-007)
+// ---------------------------------------------------------------------
+
+umsg!(
+    BD_STATUS,
+    BD_STATUS_LEN,
+    b"kind=block_skeleton state=running mmio=granted irq=registered"
+);
+umsg!(BD_ERR, BD_ERR_LEN, b"ERR unknown_driver_command");
+umsg!(BDC_STATUS, BDC_STATUS_LEN, b"STATUS");
+umsg!(BDC_FAULT, BDC_FAULT_LEN, b"FAULT");
+
+/// block_driver_service main loop (docs/31 §5): a skeleton, not a
+/// virtio driver. Its start sequence exercises every granted device
+/// mechanism exactly once — device_info, one real MMIO read of the
+/// virtio magic register, one *denied* MMIO write (the right is
+/// withheld on purpose), a DMA byte written and read back, then a
+/// blocking wait for the synthetic boot attention event on its IRQ
+/// endpoint. After that it serves bounded STATUS/FAULT commands from
+/// driver_manager; FAULT dereferences an unmapped address for the
+/// containment test. Restart re-runs the whole sequence.
+#[link_section = ".user.text"]
+extern "C" fn block_driver_body() -> ! {
+    let mut ib = MaybeUninit::<[u8; 192]>::uninit();
+    let ip = addr_of_mut!(ib) as *mut u8;
+    let mut cb = MaybeUninit::<[u8; 64]>::uninit();
+    let cp = addr_of_mut!(cb) as *mut u8;
+    sys3(SYS_DEVICE_INFO, 1, ip as u64, 192);
+    sys3(SYS_MMIO_READ, 1, 0, 4);
+    sys4(SYS_MMIO_WRITE, 1, 0, 4, 0);
+    sys4(SYS_DMA_WRITE, 1, 0, 1, 0x41);
+    sys3(SYS_DMA_READ, 1, 0, 1);
+    sys3(SYS_RECV, 2, cp as u64, 1);
+    loop {
+        let r = sys3(SYS_RECV, 0, cp as u64, 64);
+        if r <= 0 {
+            continue;
+        }
+        let n = r as usize;
+        if eqs(cp, n, addr_of!(BDC_STATUS) as *const u8, BDC_STATUS_LEN) {
+            sys3(
+                SYS_SEND,
+                0,
+                addr_of!(BD_STATUS) as u64,
+                BD_STATUS_LEN as u64,
+            );
+        } else if eqs(cp, n, addr_of!(BDC_FAULT) as *const u8, BDC_FAULT_LEN) {
+            // Deliberate contained fault (docs/31 §5 test mode): the
+            // store below hits an unmapped page.
+            // SAFETY: intentionally invalid; the kernel contains it.
+            unsafe { write_volatile(0x4000_0000 as *mut u8, 1) };
+            // If containment ever failed to trigger, exhaust the CPU so
+            // the watchdog contains us instead.
+            // SAFETY: intentional infinite loop; never returns.
+            unsafe { core::arch::asm!("1:", "j 1b", options(noreturn)) }
+        } else {
+            sys3(SYS_SEND, 0, addr_of!(BD_ERR) as u64, BD_ERR_LEN as u64);
         }
     }
 }
