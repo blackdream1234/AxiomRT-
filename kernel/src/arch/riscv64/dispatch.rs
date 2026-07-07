@@ -36,6 +36,10 @@ const SYS_INFO: u64 = 11;
 const SYS_TASK_KILL: u64 = 12;
 const SYS_TASK_RESTART: u64 = 13;
 const SYS_SHUTDOWN: u64 = 14;
+// Device syscalls (docs/31 §7/§8; AXIOM-DRV-003/004).
+const SYS_DEVICE_INFO: u64 = 15;
+const SYS_MMIO_READ: u64 = 16;
+const SYS_MMIO_WRITE: u64 = 17;
 
 // Result codes returned in a0 (docs/04_SYSCALL_MODEL.md).
 const ERR_INVALID_CAP: i64 = -2;
@@ -426,6 +430,25 @@ fn put_dec(mut v: u64) {
     }
 }
 
+fn put_hex(mut v: u64) {
+    uart::put_str("0x");
+    if v == 0 {
+        uart::put_byte(b'0');
+        return;
+    }
+    let mut buf = [0u8; 16];
+    let mut i = buf.len();
+    while v > 0 {
+        i -= 1;
+        let d = (v & 0xf) as u8;
+        buf[i] = if d < 10 { b'0' + d } else { b'a' + (d - 10) };
+        v >>= 4;
+    }
+    for &b in &buf[i..] {
+        uart::put_byte(b);
+    }
+}
+
 // ---- User-memory copy (SUM-gated) ---------------------------------------
 
 fn set_sum() {
@@ -581,6 +604,18 @@ pub fn on_syscall(num: u64, frame: &mut TrapFrame) -> bool {
         }
         SYS_SHUTDOWN => {
             sys_shutdown(frame);
+            true
+        }
+        SYS_DEVICE_INFO => {
+            sys_device_info(frame);
+            true
+        }
+        SYS_MMIO_READ => {
+            sys_mmio_read(frame);
+            true
+        }
+        SYS_MMIO_WRITE => {
+            sys_mmio_write(frame);
             true
         }
         _ => false,
@@ -910,7 +945,6 @@ static DEVICES: [DeviceDef; 1] = [DeviceDef {
 /// bounds → occupancy → object type → device id known → rights. On
 /// success returns the device id the capability names. This lookup runs
 /// before any device operation touches anything (docs/31 §10).
-#[allow(dead_code)] // wired to the device syscalls by AXIOM-DRV-003
 fn device_cap_check(cur: usize, cap_index: usize, required: u16) -> CapCheck {
     let tasks = tasks_mut();
     if cap_index >= CAPS_PER_TASK {
@@ -944,6 +978,195 @@ pub fn register_devices() {
         uart::put_str("\n");
         i += 1;
     }
+}
+
+// ---- Device syscalls (AXIOM-DRV-003; docs/31 §7) --------------------------
+
+/// Emit one device-operation denial line (docs/31 §7/§8) and record the
+/// event. `kind` names the denied mechanism (MMIO_DENIED / DMA_DENIED /
+/// DEVICE_DENIED). Nothing was touched when this is called.
+fn deny_device_op(cur: usize, kind: &str, reason: &str) {
+    ring_push(EV_CAP_DENIED, cur);
+    uart::put_str(kind);
+    uart::put_str(" task=");
+    uart::put_str(tasks_mut()[cur].name);
+    uart::put_str(" reason=");
+    uart::put_str(reason);
+    uart::put_str("\n");
+}
+
+/// Map a failed device capability check to (error code, denial reason).
+fn device_check_err(check: CapCheck) -> (i64, &'static str) {
+    match check {
+        CapCheck::InvalidCap => (ERR_INVALID_CAP, "no_valid_capability"),
+        CapCheck::WrongType => (ERR_WRONG_OBJECT_TYPE, "no_valid_capability"),
+        CapCheck::InsufficientRights => (ERR_INSUFFICIENT_RIGHTS, "insufficient_rights"),
+        // Ok is never passed to the error path; mapped defensively.
+        CapCheck::Ok(_) => (ERR_INVALID_ARG, "unexpected"),
+    }
+}
+
+/// Log the device grants a starting task was minted (docs/31 §7/§8):
+/// authority is explicit and evidence-visible, never ambient. Called
+/// once per task, on the first (minting) start.
+fn announce_device_grants(slot: usize) {
+    let tasks = tasks_mut();
+    let mut i = 0usize;
+    while i < CAPS_PER_TASK {
+        if let Some(c) = tasks[slot].caps[i] {
+            if c.otype == OTYPE_DEVICE && (c.object_id as usize) < DEVICES.len() {
+                let d = &DEVICES[c.object_id as usize];
+                if c.rights & (DEV_RIGHT_MMIO_READ | DEV_RIGHT_MMIO_WRITE) != 0 {
+                    uart::put_str("MMIO grant task=");
+                    uart::put_str(tasks[slot].name);
+                    uart::put_str(" device=");
+                    uart::put_str(d.name);
+                    uart::put_str(" region=");
+                    uart::put_str(d.mmio_name);
+                    uart::put_str("\n");
+                }
+            }
+        }
+        i += 1;
+    }
+}
+
+/// sys_device_info: a0 = device cap index, a1 = buffer VA, a2 = max.
+/// Requires the `device_info` right. Writes a one-line bounded
+/// description of the device object (docs/31 §6).
+fn sys_device_info(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let cap_index = frame.regs[9] as usize; // a0
+    let va = frame.regs[10]; // a1
+    let max = frame.regs[11] as usize; // a2
+    let dev_id = match device_cap_check(cur, cap_index, DEV_RIGHT_INFO) {
+        CapCheck::Ok(id) => id,
+        other => {
+            let (code, reason) = device_check_err(other);
+            deny_device_op(cur, "DEVICE_DENIED", reason);
+            frame.set_a0(code);
+            return;
+        }
+    };
+    if !in_stack_window(va, max.min(INFO_MAX)) {
+        frame.set_a0(ERR_INVALID_ARG);
+        return;
+    }
+    let d = &DEVICES[dev_id as usize];
+    let mut out = InfoBuf::new();
+    out.push_str("device id=");
+    out.push_dec(dev_id as u64);
+    out.push_str(" name=");
+    out.push_str(d.name);
+    out.push_str(" kind=");
+    out.push_str(d.kind);
+    out.push_str(" mmio=");
+    out.push_str(d.mmio_name);
+    out.push_str(" mmio_size=");
+    out.push_dec(d.mmio_size);
+    out.push_str(" irq=");
+    out.push_str(d.irq_name);
+    out.push_str(" dma=");
+    out.push_str(d.dma_name);
+    out.push_str(" dma_size=");
+    out.push_dec(d.dma_size);
+    out.push_str("\n");
+    let n = out.len.min(max);
+    copy_bytes_to_user(va, &out.buf[..n]);
+    frame.set_a0(n as i64);
+}
+
+/// sys_mmio_read: a0 = device cap index, a1 = offset, a2 = width.
+/// Requires `mmio_read`. The kernel resolves the capability, checks
+/// bounds/alignment against the granted region, and performs the one
+/// volatile access itself — the driver never sees a physical address
+/// (docs/31 §7). Returns the value read.
+fn sys_mmio_read(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let cap_index = frame.regs[9] as usize; // a0
+    let offset = frame.regs[10]; // a1
+    let width = frame.regs[11]; // a2
+    let dev_id = match device_cap_check(cur, cap_index, DEV_RIGHT_MMIO_READ) {
+        CapCheck::Ok(id) => id,
+        other => {
+            let (code, reason) = device_check_err(other);
+            deny_device_op(cur, "MMIO_DENIED", reason);
+            frame.set_a0(code);
+            return;
+        }
+    };
+    let d = &DEVICES[dev_id as usize];
+    if !kernel::device::access_in_bounds(d.mmio_size, offset, width) {
+        deny_device_op(cur, "MMIO_DENIED", "out_of_range");
+        frame.set_a0(ERR_INVALID_ARG);
+        return;
+    }
+    let addr = d.mmio_base + offset;
+    // SAFETY: addr lies inside the kernel-mapped device window of a
+    // registered device object; width/alignment validated above.
+    let value: u64 = unsafe {
+        match width {
+            1 => read_volatile(addr as *const u8) as u64,
+            2 => read_volatile(addr as *const u16) as u64,
+            _ => read_volatile(addr as *const u32) as u64,
+        }
+    };
+    uart::put_str("MMIO read task=");
+    uart::put_str(tasks_mut()[cur].name);
+    uart::put_str(" device=");
+    uart::put_str(d.name);
+    uart::put_str(" offset=");
+    put_dec(offset);
+    uart::put_str(" value=");
+    put_hex(value);
+    uart::put_str("\n");
+    frame.set_a0(value as i64);
+}
+
+/// sys_mmio_write: a0 = device cap index, a1 = offset, a2 = width,
+/// a3 = value. Requires `mmio_write` — which no v1.5 task holds
+/// (docs/31 §10): the mechanism is complete, the grant is withheld.
+fn sys_mmio_write(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let cap_index = frame.regs[9] as usize; // a0
+    let offset = frame.regs[10]; // a1
+    let width = frame.regs[11]; // a2
+    let value = frame.regs[12]; // a3
+    let dev_id = match device_cap_check(cur, cap_index, DEV_RIGHT_MMIO_WRITE) {
+        CapCheck::Ok(id) => id,
+        other => {
+            let (code, reason) = device_check_err(other);
+            deny_device_op(cur, "MMIO_DENIED", reason);
+            frame.set_a0(code);
+            return;
+        }
+    };
+    let d = &DEVICES[dev_id as usize];
+    if !kernel::device::access_in_bounds(d.mmio_size, offset, width) {
+        deny_device_op(cur, "MMIO_DENIED", "out_of_range");
+        frame.set_a0(ERR_INVALID_ARG);
+        return;
+    }
+    let addr = d.mmio_base + offset;
+    // SAFETY: addr lies inside the kernel-mapped device window of a
+    // registered device object; width/alignment validated above.
+    unsafe {
+        match width {
+            1 => write_volatile(addr as *mut u8, value as u8),
+            2 => write_volatile(addr as *mut u16, value as u16),
+            _ => write_volatile(addr as *mut u32, value as u32),
+        }
+    }
+    uart::put_str("MMIO write task=");
+    uart::put_str(tasks_mut()[cur].name);
+    uart::put_str(" device=");
+    uart::put_str(d.name);
+    uart::put_str(" offset=");
+    put_dec(offset);
+    uart::put_str(" value=");
+    put_hex(value);
+    uart::put_str("\n");
+    frame.set_a0(0);
 }
 
 // ---- Supervisor / logger notification (AXIOM-SUPRT-005/008) -------------
@@ -1166,6 +1389,9 @@ fn start_service(index: usize) -> i64 {
                 );
             }
             tasks_mut()[def.slot].caps = def.caps;
+            // Device grants are minted exactly here; log them once
+            // (docs/31 §7/§8).
+            announce_device_grants(def.slot);
         }
         // A terminated app returns to Available and is re-armed with
         // its initial frame and unchanged capabilities (docs/27 §6).

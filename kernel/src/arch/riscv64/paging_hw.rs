@@ -29,6 +29,11 @@ extern "C" {
 /// UART MMIO page (QEMU virt NS16550A), kernel-only device mapping.
 const UART_PAGE: u64 = 0x1000_0000;
 
+/// First virtio-mmio transport window (QEMU virt), kernel-only device
+/// mapping (U=0). Drivers never touch it directly: every access is
+/// mediated by the capability-checked MMIO syscalls (docs/31 §7).
+const VIRTIO_MMIO0_PAGE: u64 = 0x1000_1000;
+
 /// Static kernel table arena, 4 KiB aligned (Table is align(4096)).
 /// Lives in .bss, therefore inside the R+W data span it maps for itself.
 static mut KERNEL_TABLES: [Table; ARENA_TABLES] = [Table::zeroed(); ARENA_TABLES];
@@ -100,6 +105,9 @@ fn map_kernel_regions(arena: &mut Arena<'_>, r: &KernelRegions) {
     arena
         .identity_map_range(UART_PAGE, UART_PAGE + 0x1000, kdev)
         .expect("map uart");
+    arena
+        .identity_map_range(VIRTIO_MMIO0_PAGE, VIRTIO_MMIO0_PAGE + 0x1000, kdev)
+        .expect("map virtio mmio window");
 }
 
 /// Build the kernel page table and enable Sv39. Returns after the MMU

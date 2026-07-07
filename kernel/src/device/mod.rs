@@ -321,6 +321,27 @@ mod tests {
         }
     }
 
+    /// AXIOM-DRV-003: an MMIO operation is legal only when the fixed
+    /// order holds end to end — capability check first, then bounds
+    /// against the granted region (never against anything wider).
+    #[test]
+    fn mmio_access_requires_capability_then_bounds() {
+        let t = table();
+        let cap = DeviceCapability::new(DeviceId(0), DeviceRights::MMIO_READ);
+        let dev = t
+            .check(Some(&cap), DeviceId(0), DeviceRights::MMIO_READ)
+            .expect("read capability resolves");
+        // In-region access is accepted; the same offset is rejected the
+        // moment it leaves the granted window.
+        assert!(access_in_bounds(dev.mmio.size, 0x1fc, 4));
+        assert!(!access_in_bounds(dev.mmio.size, 0x200, 4));
+        // A write with a read-only grant never reaches the bounds check.
+        assert_eq!(
+            t.check(Some(&cap), DeviceId(0), DeviceRights::MMIO_WRITE),
+            Err(DeviceAccessError::InsufficientRights)
+        );
+    }
+
     #[test]
     fn access_bounds_reject_misaligned_and_out_of_range() {
         // In bounds, aligned.
