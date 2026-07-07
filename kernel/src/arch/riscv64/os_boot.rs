@@ -20,7 +20,8 @@ use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 
 use crate::dispatch::{
     self, cap_console, cap_control, cap_endpoint, cap_info, Cap, ServiceDef, CAP_RIGHT_CONTROL,
-    CAP_RIGHT_FS_LIST, CAP_RIGHT_FS_READ, CAP_RIGHT_RECV, CAP_RIGHT_SEND,
+    CAP_RIGHT_FS_LIST, CAP_RIGHT_FS_READ, CAP_RIGHT_RECV, CAP_RIGHT_SEND, CAP_RIGHT_STORAGE_INFO,
+    CAP_RIGHT_STORAGE_READ,
 };
 use crate::paging_hw;
 use crate::timer;
@@ -49,6 +50,8 @@ const EP_EVENT: u32 = 3;
 const EP_APP: u32 = 0;
 /// Shell <-> fs_service channel (docs/28 §3).
 const EP_FS: u32 = 4;
+/// Storage channel (docs/29 §4).
+const EP_STOR: u32 = 5;
 
 /// Service-table index of the faulty demo task (`run demo`).
 const SVC_FAULTY: u64 = 4;
@@ -63,7 +66,8 @@ const APP_COUNTER: u64 = 8;
 
 #[repr(C, align(4096))]
 struct Stack([u8; 4096]);
-static mut OS_STACKS: [Stack; 11] = [
+static mut OS_STACKS: [Stack; 12] = [
+    Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
@@ -86,7 +90,7 @@ const NO_CAPS: [Option<Cap>; dispatch::CAPS_PER_TASK] = [None; dispatch::CAPS_PE
 /// Service table (docs/25 §3). Entry addresses, stacks, and capability
 /// grants are runtime values, patched once by `os_boot` before
 /// dispatching; the rest is fixed here.
-static mut TABLE: [ServiceDef; 10] = [
+static mut TABLE: [ServiceDef; 11] = [
     ServiceDef {
         name: "supervisor_service",
         entry: 0,
@@ -167,6 +171,14 @@ static mut TABLE: [ServiceDef; 10] = [
         slot: 10,
         caps: NO_CAPS,
     },
+    ServiceDef {
+        name: "storage_service",
+        entry: 0,
+        stack_phys: 0,
+        prio: 2,
+        slot: 11,
+        caps: NO_CAPS,
+    },
 ];
 
 fn stack_phys(i: usize) -> u64 {
@@ -179,7 +191,7 @@ fn stack_phys(i: usize) -> u64 {
 /// timer, dispatch.
 pub fn os_boot() -> ! {
     // SAFETY: single hart, boot-time exclusive access, before start().
-    let table: &'static mut [ServiceDef; 10] = unsafe { &mut *addr_of_mut!(TABLE) };
+    let table: &'static mut [ServiceDef; 11] = unsafe { &mut *addr_of_mut!(TABLE) };
     table[0].entry = supervisor_body as *const () as u64;
     table[0].stack_phys = stack_phys(1);
     table[0].caps[0] = Some(cap_endpoint(EP_FAULT, CAP_RIGHT_RECV | CAP_RIGHT_CONTROL));
@@ -201,6 +213,11 @@ pub fn os_boot() -> ! {
     table[3].caps[5] = Some(cap_endpoint(
         EP_FS,
         CAP_RIGHT_SEND | CAP_RIGHT_RECV | CAP_RIGHT_FS_READ | CAP_RIGHT_FS_LIST,
+    ));
+    // Storage authority: shell only among operators (docs/29 §5).
+    table[3].caps[6] = Some(cap_endpoint(
+        EP_STOR,
+        CAP_RIGHT_SEND | CAP_RIGHT_RECV | CAP_RIGHT_STORAGE_INFO | CAP_RIGHT_STORAGE_READ,
     ));
     table[4].entry = faulty_body as *const () as u64;
     table[4].stack_phys = stack_phys(5);
@@ -225,6 +242,14 @@ pub fn os_boot() -> ! {
     table[9].entry = fs_body as *const () as u64;
     table[9].stack_phys = stack_phys(10);
     table[9].caps[0] = Some(cap_endpoint(EP_FS, CAP_RIGHT_RECV | CAP_RIGHT_SEND));
+    table[9].caps[1] = Some(cap_endpoint(
+        EP_STOR,
+        CAP_RIGHT_SEND | CAP_RIGHT_RECV | CAP_RIGHT_STORAGE_READ,
+    ));
+    // storage_service (docs/29): storage channel only.
+    table[10].entry = storage_body as *const () as u64;
+    table[10].stack_phys = stack_phys(11);
+    table[10].caps[0] = Some(cap_endpoint(EP_STOR, CAP_RIGHT_RECV | CAP_RIGHT_SEND));
 
     // SAFETY: boot-time, single hart, called once.
     unsafe { dispatch::set_service_table(table) };
@@ -387,6 +412,8 @@ extern "C" fn init_body() -> ! {
     sys3(SYS_TASK_START, 5, 0, 0);
     // Filesystem service (table index 9, docs/28).
     sys3(SYS_TASK_START, 9, 0, 0);
+    // Storage service (table index 10, docs/29).
+    sys3(SYS_TASK_START, 10, 0, 0);
     sys3(SYS_EXIT, 0, 0, 0);
     loop {
         sys3(SYS_YIELD, 0, 0, 0);
@@ -659,6 +686,8 @@ umsg!(F_MHELLO, F_MHELLO_LEN, b"/apps/hello.manifest");
 umsg!(F_MCOUNTER, F_MCOUNTER_LEN, b"/apps/counter.manifest");
 umsg!(F_MFAULT, F_MFAULT_LEN, b"/apps/fault_demo.manifest");
 umsg!(F_ABOUT, F_ABOUT_LEN, b"/docs/about");
+umsg!(F_STORV, F_STORV_LEN, b"/storage/version");
+umsg!(Q_BLOCK1, Q_BLOCK1_LEN, b"READ block=1");
 // Directory listings and file contents (single bounded reply each).
 umsg!(R_ROOT, R_ROOT_LEN, b"OK etc apps docs");
 umsg!(R_ETC, R_ETC_LEN, b"OK version limitations");
@@ -671,7 +700,7 @@ umsg!(R_DOCS, R_DOCS_LEN, b"OK about");
 umsg!(
     R_VERSION,
     R_VERSION_LEN,
-    b"OK AxiomRT v1.3-readonly-fs RISC-V 64 evaluation stage"
+    b"OK AxiomRT v1.4-storage-service RISC-V 64 evaluation stage"
 );
 umsg!(
     R_LIMITS,
@@ -749,11 +778,179 @@ extern "C" fn fs_body() -> ! {
                 fs_reply(addr_of!(R_MFAULT) as *const u8, R_MFAULT_LEN);
             } else if eqs(p, m, addr_of!(F_ABOUT) as *const u8, F_ABOUT_LEN) {
                 fs_reply(addr_of!(R_ABOUT) as *const u8, R_ABOUT_LEN);
+            } else if eqs(p, m, addr_of!(F_STORV) as *const u8, F_STORV_LEN) {
+                // Storage-backed path (docs/29 §7): nested synchronous
+                // IPC on the fs service's own storage capability.
+                let mut sb = MaybeUninit::<[u8; 64]>::uninit();
+                let sp = addr_of_mut!(sb) as *mut u8;
+                if sys3(SYS_SEND, 1, addr_of!(Q_BLOCK1) as u64, Q_BLOCK1_LEN as u64) < 0 {
+                    fs_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+                } else {
+                    let sr = sys3(SYS_RECV, 1, sp as u64, 64);
+                    if sr > 0 {
+                        fs_reply(sp as *const u8, sr as usize);
+                    } else {
+                        fs_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+                    }
+                }
             } else {
                 fs_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
             }
         } else {
             fs_reply(addr_of!(E_BADPATH) as *const u8, E_BADPATH_LEN);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// storage_service (U-mode): read-only block image (AXIOM-STOR-002..004)
+// ---------------------------------------------------------------------
+
+// Protocol (docs/29 §4).
+umsg!(S_INFO, S_INFO_LEN, b"INFO");
+umsg!(S_READ, S_READ_LEN, b"READ block=");
+umsg!(S_RANGE, S_RANGE_LEN, b"READ_RANGE start=");
+umsg!(S_COUNT, S_COUNT_LEN, b" count=");
+umsg!(
+    S_R_INFO,
+    S_R_INFO_LEN,
+    b"OK block_size=48 blocks=8 readonly=true"
+);
+umsg!(S_R_DATA, S_R_DATA_LEN, b"OK data=");
+umsg!(S_E_BLOCK, S_E_BLOCK_LEN, b"ERR bad_block");
+umsg!(S_E_MANY, S_E_MANY_LEN, b"ERR too_many_blocks");
+umsg!(S_E_MAL, S_E_MAL_LEN, b"ERR malformed");
+// Block image (docs/29 §8): 8 x 48-byte read-only blocks.
+umsg!(B0, B0_LEN, b"AXSTOR v1 blocks=8 bs=48 ro=1");
+umsg!(B1, B1_LEN, b"AxiomRT v1.4-storage-service evaluation stage");
+umsg!(B2, B2_LEN, b"AxiomRT microkernel safety runtime");
+umsg!(B3, B3_LEN, b"apps: hello counter fault_demo prio=2");
+umsg!(BRES, BRES_LEN, b"reserved");
+
+/// Answer one READ: branch chain with a call per arm — a
+/// value-returning match here becomes an LLVM lookup table in kernel
+/// .rodata, which U-mode must never reference (docs/25 §2; found live
+/// when storage_service page-faulted on 0xfb58 and was contained).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn block_reply(qp: *mut u8, n: u64) {
+    if n == 0 {
+        storage_send_block(qp, addr_of!(B0) as *const u8, B0_LEN);
+    } else if n == 1 {
+        storage_send_block(qp, addr_of!(B1) as *const u8, B1_LEN);
+    } else if n == 2 {
+        storage_send_block(qp, addr_of!(B2) as *const u8, B2_LEN);
+    } else if n == 3 {
+        storage_send_block(qp, addr_of!(B3) as *const u8, B3_LEN);
+    } else if n <= 7 {
+        storage_send_block(qp, addr_of!(BRES) as *const u8, BRES_LEN);
+    } else {
+        sys3(
+            SYS_SEND,
+            0,
+            addr_of!(S_E_BLOCK) as u64,
+            S_E_BLOCK_LEN as u64,
+        );
+    }
+}
+
+/// Parse decimal digits from `from`; returns (value, index after the
+/// digits) or u64::MAX when no digit is present. Bounded. Manual range
+/// check: no core calls in U-mode (file header rules).
+#[allow(clippy::manual_range_contains)]
+#[link_section = ".user.text"]
+#[inline(never)]
+fn parse_dec_stop(p: *const u8, from: usize, n: usize) -> (u64, usize) {
+    let mut v: u64 = 0;
+    let mut i = from;
+    let mut any = false;
+    while i < n {
+        // SAFETY: in-bounds read.
+        let b = unsafe { read_volatile(p.add(i)) };
+        if b < b'0' || b > b'9' {
+            break;
+        }
+        v = v.wrapping_mul(10).wrapping_add((b - b'0') as u64);
+        i += 1;
+        any = true;
+    }
+    if any {
+        (v, i)
+    } else {
+        (u64::MAX, i)
+    }
+}
+
+/// Send one `OK data=<block>` reply assembled in a stack buffer.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn storage_send_block(qp: *mut u8, bp: *const u8, blen: usize) {
+    let hdr = addr_of!(S_R_DATA) as *const u8;
+    let mut q = 0usize;
+    while q < S_R_DATA_LEN {
+        // SAFETY: bounded copy into the 64-byte reply buffer.
+        unsafe { write_volatile(qp.add(q), read_volatile(hdr.add(q))) };
+        q += 1;
+    }
+    let mut i = 0usize;
+    while i < blen && q < 64 {
+        // SAFETY: bounded copy (48-byte block max, 8-byte prefix).
+        unsafe { write_volatile(qp.add(q), read_volatile(bp.add(i))) };
+        i += 1;
+        q += 1;
+    }
+    sys3(SYS_SEND, 0, qp as u64, q as u64);
+}
+
+/// storage_service main loop (docs/29 §3/§4): one bounded request in,
+/// one bounded reply out; malformed input always answers ERR.
+#[link_section = ".user.text"]
+extern "C" fn storage_body() -> ! {
+    let mut buf = MaybeUninit::<[u8; 64]>::uninit();
+    let bp = addr_of_mut!(buf) as *mut u8;
+    let mut rep = MaybeUninit::<[u8; 64]>::uninit();
+    let qp = addr_of_mut!(rep) as *mut u8;
+    loop {
+        let r = sys3(SYS_RECV, 0, bp as u64, 64);
+        if r <= 0 {
+            continue;
+        }
+        let n = r as usize;
+        if eqs(bp, n, addr_of!(S_INFO) as *const u8, S_INFO_LEN) {
+            sys3(SYS_SEND, 0, addr_of!(S_R_INFO) as u64, S_R_INFO_LEN as u64);
+        } else if starts_with(bp, n, addr_of!(S_READ) as *const u8, S_READ_LEN) {
+            let (blk, end) = parse_dec_stop(bp, S_READ_LEN, n);
+            if blk == u64::MAX || end != n {
+                sys3(SYS_SEND, 0, addr_of!(S_E_MAL) as u64, S_E_MAL_LEN as u64);
+            } else {
+                block_reply(qp, blk);
+            }
+        } else if starts_with(bp, n, addr_of!(S_RANGE) as *const u8, S_RANGE_LEN) {
+            // READ_RANGE start=<n> count=<m>: single-block only (docs/29 §4).
+            let (start, i) = parse_dec_stop(bp, S_RANGE_LEN, n);
+            let after = i + S_COUNT_LEN;
+            if start == u64::MAX
+                || after > n
+                || !eqs(
+                    unsafe { bp.add(i) } as *const u8,
+                    S_COUNT_LEN,
+                    addr_of!(S_COUNT) as *const u8,
+                    S_COUNT_LEN,
+                )
+            {
+                sys3(SYS_SEND, 0, addr_of!(S_E_MAL) as u64, S_E_MAL_LEN as u64);
+            } else {
+                let (count, end) = parse_dec_stop(bp, after, n);
+                if count == u64::MAX || end != n {
+                    sys3(SYS_SEND, 0, addr_of!(S_E_MAL) as u64, S_E_MAL_LEN as u64);
+                } else if count != 1 {
+                    sys3(SYS_SEND, 0, addr_of!(S_E_MANY) as u64, S_E_MANY_LEN as u64);
+                } else {
+                    block_reply(qp, start);
+                }
+            }
+        } else {
+            sys3(SYS_SEND, 0, addr_of!(S_E_MAL) as u64, S_E_MAL_LEN as u64);
         }
     }
 }
@@ -799,6 +996,8 @@ umsg!(C_MEMORY, C_MEMORY_LEN, b"memory");
 umsg!(C_UPTIME, C_UPTIME_LEN, b"uptime");
 umsg!(C_EVENTS, C_EVENTS_LEN, b"events");
 umsg!(C_RUN_DEMO, C_RUN_DEMO_LEN, b"run demo");
+umsg!(C_STORI, C_STORI_LEN, b"storage info");
+umsg!(C_STORR, C_STORR_LEN, b"storage read ");
 umsg!(C_LS, C_LS_LEN, b"ls");
 umsg!(C_LSSP, C_LSSP_LEN, b"ls ");
 umsg!(C_CATSP, C_CATSP_LEN, b"cat ");
@@ -880,6 +1079,48 @@ fn shell_fs_cmd(bp: *const u8, n: usize, tail_at: usize, cat: bool, qp: *mut u8,
     }
 }
 
+/// Build `INFO` / `READ block=<n>` and forward it to storage_service
+/// on the shell's storage capability (slot 6), printing the reply
+/// verbatim (docs/29 §4). `tail_at >= n` means `storage info`.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn shell_stor_cmd(bp: *const u8, n: usize, tail_at: usize, qp: *mut u8, rp: *mut u8) {
+    let mut q = 0usize;
+    if tail_at >= n {
+        let hdr = addr_of!(S_INFO) as *const u8;
+        while q < S_INFO_LEN {
+            // SAFETY: bounded copy into the 64-byte request buffer.
+            unsafe { write_volatile(qp.add(q), read_volatile(hdr.add(q))) };
+            q += 1;
+        }
+    } else {
+        let hdr = addr_of!(S_READ) as *const u8;
+        while q < S_READ_LEN {
+            // SAFETY: bounded copy into the 64-byte request buffer.
+            unsafe { write_volatile(qp.add(q), read_volatile(hdr.add(q))) };
+            q += 1;
+        }
+        let mut i = tail_at;
+        while i < n && q < 63 {
+            // SAFETY: bounded copy inside both 64-byte buffers.
+            unsafe { write_volatile(qp.add(q), read_volatile(bp.add(i))) };
+            i += 1;
+            q += 1;
+        }
+    }
+    if sys3(SYS_SEND, 6, qp as u64, q as u64) < 0 {
+        uput!(M_ERR, M_ERR_LEN);
+        return;
+    }
+    let r = sys3(SYS_RECV, 6, rp as u64, 64);
+    if r > 0 {
+        uwrite_ptr(rp, r as usize);
+        uput!(M_NL, M_NL_LEN);
+    } else {
+        uput!(M_ERR, M_ERR_LEN);
+    }
+}
+
 #[link_section = ".user.text"]
 #[inline(never)]
 fn shell_info(kind: u64, op: *mut u8) {
@@ -931,6 +1172,10 @@ extern "C" fn shell_body() -> ! {
             if sys3(SYS_TASK_START, SVC_FAULTY, 0, 0) < 0 {
                 uput!(M_ERR, M_ERR_LEN);
             }
+        } else if is_cmd!(bp, n, C_STORI, C_STORI_LEN) {
+            shell_stor_cmd(bp, n, n, qp, op); // INFO
+        } else if starts_with(bp, n, addr_of!(C_STORR) as *const u8, C_STORR_LEN) {
+            shell_stor_cmd(bp, n, C_STORR_LEN, qp, op); // READ block=<n>
         } else if is_cmd!(bp, n, C_LS, C_LS_LEN) {
             shell_fs_cmd(bp, n, n, false, qp, op);
         } else if starts_with(bp, n, addr_of!(C_LSSP) as *const u8, C_LSSP_LEN) {

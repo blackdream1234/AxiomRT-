@@ -33,12 +33,14 @@ rendezvous IPC + preemptive timer).
 ## 4. Block protocol (AXIOM-STOR-002)
 
 Endpoint 5 (`EP_STOR`), ≤ 64-byte request/reply, one reply per
-request. Geometry: **block_size=64, blocks=8, read-only** (a block
-fits one reply — no partial reads).
+request. Geometry: **block_size=48, blocks=8, read-only**. 48 = 64-byte
+bounded reply minus the 8-byte `OK data=` prefix — a block always
+fits one reply, no partial reads. (The roadmap's `block_size=64`
+example cannot fit one bounded reply; disclosed deviation.)
 
 Requests → replies:
 
-* `INFO` → `OK block_size=64 blocks=8 readonly=true`
+* `INFO` → `OK block_size=48 blocks=8 readonly=true`
 * `READ block=<n>` → `OK data=<printable-ascii>` | `ERR bad_block`
 * `READ_RANGE start=<n> count=<m>` → single-block ranges only in this
   stage: `count=1` behaves like `READ`; `count>1` → `ERR
@@ -78,7 +80,7 @@ nested synchronous IPC on its own storage capability, and forwards
 the bounded reply. The kernel routes messages and checks capabilities;
 it parses neither the path nor the block.
 
-## 8. Static block image (AXIOM-STOR-003)
+## 8. Static block image (AXIOM-STOR-003) — 8 × 48 B
 
 | block | content |
 |---|---|
@@ -102,6 +104,6 @@ The path to a real backing store (QEMU virtio-blk MMIO, device
 discovery, the kernel MMIO-grant mechanism it needs, and what stays in
 user space) is investigated in docs/30_VIRTIO_BLOCK_INVESTIGATION.md
 (AXIOM-STOR-010); the driver itself belongs to the v1.5 driver
-framework phase. Limitations: static 8×64-byte image, single-block
+framework phase. Limitations: static 8×48-byte image, single-block
 replies, read-only, per-endpoint capability granularity (docs/28 §7),
 emulator-only, evaluation stage, no certification claim.

@@ -34,7 +34,7 @@ const UART_PAGE: u64 = 0x1000_0000;
 static mut KERNEL_TABLES: [Table; ARENA_TABLES] = [Table::zeroed(); ARENA_TABLES];
 
 /// Maximum concurrent user address spaces on target (v0.3).
-pub const MAX_USER_AS: usize = 11;
+pub const MAX_USER_AS: usize = 12;
 
 /// Static user table arenas, one per user address space.
 static mut USER_TABLES: [[Table; ARENA_TABLES]; MAX_USER_AS] =

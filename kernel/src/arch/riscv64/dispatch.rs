@@ -58,7 +58,7 @@ const RIGHT_SEND: u16 = 1 << 3;
 const RIGHT_RECV: u16 = 1 << 4;
 const RIGHT_CONTROL: u16 = 1 << 7;
 /// Capability slots per task (small, static).
-pub const CAPS_PER_TASK: usize = 6;
+pub const CAPS_PER_TASK: usize = 8;
 
 /// On-target capability: (object type, object id, rights). The running
 /// form of the host `Capability` (docs/06 §3).
@@ -117,6 +117,12 @@ pub const CAP_RIGHT_CONTROL: u16 = RIGHT_CONTROL;
 pub const CAP_RIGHT_FS_READ: u16 = 1 << 5;
 #[allow(dead_code)] // os_boot-only API
 pub const CAP_RIGHT_FS_LIST: u16 = 1 << 6;
+// Storage rights (docs/29 §5): declarative bits on the storage
+// endpoint capability; the kernel never parses storage requests.
+#[allow(dead_code)] // os_boot-only API
+pub const CAP_RIGHT_STORAGE_INFO: u16 = 1 << 8;
+#[allow(dead_code)] // os_boot-only API
+pub const CAP_RIGHT_STORAGE_READ: u16 = 1 << 9;
 
 /// Outcome of a capability lookup (fixed check order, docs/06 §4).
 /// On success carries the resolved endpoint id.
@@ -192,7 +198,7 @@ const EMPTY_TCB: Tcb = Tcb {
 };
 
 /// Maximum on-target tasks (10 since the app phase, docs/27 §2).
-pub const MAX_TASKS: usize = 11;
+pub const MAX_TASKS: usize = 12;
 
 static mut TASKS: [Tcb; MAX_TASKS] = [EMPTY_TCB; MAX_TASKS];
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
@@ -222,8 +228,8 @@ enum Ep {
 
 /// Endpoint ids used on target: 0 = app channel (docs/27), 1 = shell
 /// line channel / demo log, 2 = fault channel, 3 = event channel,
-/// 4 = filesystem channel (docs/28).
-const NUM_ENDPOINTS: usize = 5;
+/// 4 = filesystem channel (docs/28), 5 = storage channel (docs/29).
+const NUM_ENDPOINTS: usize = 6;
 static mut ENDPOINTS: [Ep; NUM_ENDPOINTS] = [Ep::Idle; NUM_ENDPOINTS];
 /// Kernel staging buffer for user send→recv copies (bounded, no shared
 /// memory, docs/17 §2).

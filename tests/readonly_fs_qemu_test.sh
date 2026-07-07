@@ -64,7 +64,7 @@ expect "OK version limitations"
 expect "OK hello.manifest counter.manifest fault_demo.manifest"
 
 # File contents.
-expect "OK AxiomRT v1.3-readonly-fs RISC-V 64 evaluation stage"
+expect "OK AxiomRT v1.4-storage-service RISC-V 64 evaluation stage"
 expect "OK hello: prio=2 caps=console restart=rerun"
 
 # Invalid path fails safely; overlong path (console-truncated at 63
