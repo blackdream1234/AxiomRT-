@@ -37,8 +37,10 @@ docs/01_SCOPE_AND_NON_GOALS.md.
   restart (docs/31). Earlier: `v1.4-storage-service`,
   `v1.3-readonly-fs`, `v1.2-app-loader`, `v1.1-os-shell`,
   `v1.0.1-clean`, `v1.0-industrial-eval`.
-* **Next milestone:** `v1.6-storage-backed-fs-and-loader` (deeper
-  storage↔fs integration, restricted app image loading).
+* **Next milestone:** `v1.6-storage-backed-loader` (restricted app
+  image records, storage-backed fs path, loader validation) — **in
+  progress**; on-target version metadata reports `v1.6-dev` until the
+  v1.6 gate passes.
 * **Next product direction:** real OS completion
   (`AxiomrtFull Completion Mode.md` — user-facing shell, application
   loading, filesystem/storage services, host tooling).

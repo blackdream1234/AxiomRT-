@@ -107,7 +107,7 @@ expect "MMIO_DENIED task=fault_demo reason=no_valid_capability"
 expect "DMA_DENIED task=fault_demo reason=no_valid_capability"
 
 # 11. Storage chain unchanged.
-expect "OK data=AxiomRT v1.4-storage-service evaluation stage"
+expect "OK data=AxiomRT v1.6"
 
 # 12. Controlled shutdown.
 expect "SHUTDOWN controlled=true by=shell_service"

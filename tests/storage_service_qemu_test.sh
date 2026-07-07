@@ -58,7 +58,7 @@ expect "ERR bad_block"
 expect "ERR malformed"
 
 # shell -> fs -> storage -> fs -> shell chain (docs/29 §7).
-expect "OK data=AxiomRT v1.4-storage-service evaluation stage"
+expect "OK data=AxiomRT v1.6"
 
 # No pre-existing capability dropped by the table growth (docs/29 §5):
 # the shell still holds endpoint(line) + console + info + control +

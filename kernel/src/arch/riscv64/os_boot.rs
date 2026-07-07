@@ -799,7 +799,7 @@ umsg!(R_DOCS, R_DOCS_LEN, b"OK about");
 umsg!(
     R_VERSION,
     R_VERSION_LEN,
-    b"OK AxiomRT v1.4-storage-service RISC-V 64 evaluation stage"
+    b"OK AxiomRT v1.6-dev RISC-V 64 evaluation stage"
 );
 umsg!(
     R_LIMITS,
@@ -824,7 +824,7 @@ umsg!(
 umsg!(
     R_ABOUT,
     R_ABOUT_LEN,
-    b"OK AxiomRT microkernel safety runtime see docs/INDEX.md"
+    b"OK AxiomRT v1.6-dev microkernel safety runtime docs/INDEX.md"
 );
 umsg!(E_NOTFOUND, E_NOTFOUND_LEN, b"ERR not_found");
 umsg!(E_BADPATH, E_BADPATH_LEN, b"ERR bad_path");
@@ -921,7 +921,7 @@ umsg!(S_E_MANY, S_E_MANY_LEN, b"ERR too_many_blocks");
 umsg!(S_E_MAL, S_E_MAL_LEN, b"ERR malformed");
 // Block image (docs/29 §8): 8 x 48-byte read-only blocks.
 umsg!(B0, B0_LEN, b"AXSTOR v1 blocks=8 bs=48 ro=1");
-umsg!(B1, B1_LEN, b"AxiomRT v1.4-storage-service evaluation stage");
+umsg!(B1, B1_LEN, b"AxiomRT v1.6-dev evaluation stage");
 umsg!(B2, B2_LEN, b"AxiomRT microkernel safety runtime");
 umsg!(B3, B3_LEN, b"apps: hello counter fault_demo prio=2");
 umsg!(BRES, BRES_LEN, b"reserved");
@@ -1342,7 +1342,7 @@ umsg!(
 umsg!(
     M_VERSION,
     M_VERSION_LEN,
-    b"AxiomRT v1.1-os RISC-V 64 microkernel (QEMU evaluation build)\n"
+    b"AxiomRT v1.6-dev RISC-V 64 microkernel (QEMU evaluation build)\n"
 );
 umsg!(M_UNKNOWN, M_UNKNOWN_LEN, b"unknown command (try: help)\n");
 umsg!(M_ERR, M_ERR_LEN, b"error\n");
