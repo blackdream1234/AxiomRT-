@@ -254,6 +254,12 @@ pub fn os_boot() -> ! {
         EP_STOR,
         CAP_RIGHT_SEND | CAP_RIGHT_RECV | CAP_RIGHT_STORAGE_INFO | CAP_RIGHT_STORAGE_READ,
     ));
+    // Driver-manager channel (docs/31 §4): the shell's ONLY path to
+    // drivers is forwarding text lines to driver_manager — it holds no
+    // device capability and can never reach MMIO. The shell's table is
+    // now full: 8/8 of CAPS_PER_TASK (line, console, info, control,
+    // app, fs, storage, driver-manager) — checked by the driver test.
+    table[3].caps[7] = Some(cap_endpoint(EP_DRV, CAP_RIGHT_SEND | CAP_RIGHT_RECV));
     table[4].entry = faulty_body as *const () as u64;
     table[4].stack_phys = stack_phys(5);
     // faulty_task: no capabilities at all (its IPC attempt is denied).
@@ -1331,7 +1337,7 @@ umsg!(M_PROMPT, M_PROMPT_LEN, b"axiom> ");
 umsg!(
     M_HELP,
     M_HELP_LEN,
-    b"commands: help version tasks faults ipc caps memory uptime events\n          run demo | kill <idx> | restart <idx> | clear | shutdown\n"
+    b"commands: help version tasks faults ipc caps memory uptime events\n          run demo | kill <idx> | restart <idx> | clear | shutdown\n          drivers | driver <info|restart|fault> block\n"
 );
 umsg!(
     M_VERSION,
@@ -1359,6 +1365,8 @@ umsg!(C_MEMORY, C_MEMORY_LEN, b"memory");
 umsg!(C_UPTIME, C_UPTIME_LEN, b"uptime");
 umsg!(C_EVENTS, C_EVENTS_LEN, b"events");
 umsg!(C_RUN_DEMO, C_RUN_DEMO_LEN, b"run demo");
+umsg!(C_DRIVERS, C_DRIVERS_LEN, b"drivers");
+umsg!(C_DRIVERSP, C_DRIVERSP_LEN, b"driver ");
 umsg!(C_STORI, C_STORI_LEN, b"storage info");
 umsg!(C_STORR, C_STORR_LEN, b"storage read ");
 umsg!(C_LS, C_LS_LEN, b"ls");
@@ -1389,6 +1397,26 @@ fn shell_app_forward(bp: *mut u8, n: usize, rp: *mut u8) {
         return;
     }
     let r = sys3(SYS_RECV, 4, rp as u64, 64);
+    if r > 0 {
+        uwrite_ptr(rp, r as usize);
+        uput!(M_NL, M_NL_LEN);
+    } else {
+        uput!(M_ERR, M_ERR_LEN);
+    }
+}
+
+/// Forward one raw driver command line to driver_manager on the
+/// shell's driver capability (slot 7) and print the bounded reply
+/// (docs/31 §4): all driver knowledge is manager policy — the shell
+/// holds no device capability and can never reach MMIO.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn shell_drv_forward(bp: *mut u8, n: usize, rp: *mut u8) {
+    if sys3(SYS_SEND, 7, bp as u64, n as u64) < 0 {
+        uput!(M_ERR, M_ERR_LEN);
+        return;
+    }
+    let r = sys3(SYS_RECV, 7, rp as u64, 64);
     if r > 0 {
         uwrite_ptr(rp, r as usize);
         uput!(M_NL, M_NL_LEN);
@@ -1535,6 +1563,12 @@ extern "C" fn shell_body() -> ! {
             if sys3(SYS_TASK_START, SVC_FAULTY, 0, 0) < 0 {
                 uput!(M_ERR, M_ERR_LEN);
             }
+        } else if is_cmd!(bp, n, C_DRIVERS, C_DRIVERS_LEN)
+            || starts_with(bp, n, addr_of!(C_DRIVERSP) as *const u8, C_DRIVERSP_LEN)
+        {
+            // drivers / driver <info|restart|fault> block: every
+            // driver line is driver_manager policy (docs/31 §4).
+            shell_drv_forward(bp, n, op);
         } else if is_cmd!(bp, n, C_STORI, C_STORI_LEN) {
             shell_stor_cmd(bp, n, n, qp, op); // INFO
         } else if starts_with(bp, n, addr_of!(C_STORR) as *const u8, C_STORR_LEN) {
