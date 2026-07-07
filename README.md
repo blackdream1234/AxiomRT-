@@ -27,11 +27,13 @@ docs/01_SCOPE_AND_NON_GOALS.md.
 
 ## 3. Current phase
 
-* **Current milestone:** `v1.0-industrial-eval` — Industrial Evaluation
-  Kit (completion roadmap `Full Completion Mode.md` Stages 0–9 done;
-  tags `v0.1-final` … `v1.0-industrial-eval`).
-* **Next milestone:** `v1.0.1-clean` — release hygiene (zero warnings,
-  consistent docs, archived clean verification log).
+* **Current milestone:** `v1.2-app-loader` — application model: the
+  shell lists and starts isolated apps by name (hello / fault_demo /
+  counter) through the user-space app loader (docs/27). Earlier
+  milestones: `v1.1-os-shell` (interactive `axiom>` OS boot flow),
+  `v1.0.1-clean`, `v1.0-industrial-eval` (tags `v0.1-final` …).
+* **Next milestone:** filesystem service (read-only embedded archive,
+  `ls`/`cat` in the shell).
 * **Next product direction:** real OS completion
   (`AxiomrtFull Completion Mode.md` — user-facing shell, application
   loading, filesystem/storage services, host tooling).

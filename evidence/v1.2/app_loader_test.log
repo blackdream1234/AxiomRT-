@@ -1,0 +1,24 @@
+building os_boot kernel
+    Finished `release` profile [optimized] target(s) in 0.00s
+booting QEMU (scripted app session)
+ok: found "SERVICE started=app_loader_service"
+ok: found "axiom> "
+ok: found "apps: hello fault_demo counter"
+ok: found "hello: greeter prio=2 caps=console restart=rerun"
+ok: found "SERVICE started=hello"
+ok: found "hello from app: hello"
+ok: found "TASK_EXITED task=hello"
+ok: found "APP counter progress=1"
+ok: found "APP counter progress=3"
+ok: found "APP counter done"
+ok: found "TASK_EXITED task=counter"
+ok: found "SERVICE started=fault_demo"
+ok: found "CAP_DENIED task=fault_demo"
+ok: found "FAULT type=WatchdogTimeout task=fault_demo"
+ok: found "CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive"
+ok: found "RECOVERY_APPLIED policy=Kill"
+ok: found "uptime ticks="
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
+restoring default build
+PASS: app loader test
