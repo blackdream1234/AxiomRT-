@@ -54,6 +54,8 @@ const OTYPE_CONSOLE: u8 = 1;
 const OTYPE_CONTROL: u8 = 2;
 /// Read-only introspection (sys_info).
 const OTYPE_INFO: u8 = 3;
+/// Device object access (docs/31 §10): rights are the DEV_RIGHT_* bits.
+const OTYPE_DEVICE: u8 = 4;
 const RIGHT_SEND: u16 = 1 << 3;
 const RIGHT_RECV: u16 = 1 << 4;
 const RIGHT_CONTROL: u16 = 1 << 7;
@@ -123,6 +125,33 @@ pub const CAP_RIGHT_FS_LIST: u16 = 1 << 6;
 pub const CAP_RIGHT_STORAGE_INFO: u16 = 1 << 8;
 #[allow(dead_code)] // os_boot-only API
 pub const CAP_RIGHT_STORAGE_READ: u16 = 1 << 9;
+// Device rights (docs/31 §10): meaningful on OTYPE_DEVICE capabilities
+// only. Deny-by-default; bit values mirror the host model
+// (kernel/src/device). No task holds all of them (least privilege).
+#[allow(dead_code)] // os_boot-only API
+pub const DEV_RIGHT_INFO: u16 = 1 << 0;
+#[allow(dead_code)] // os_boot-only API
+pub const DEV_RIGHT_MMIO_READ: u16 = 1 << 1;
+#[allow(dead_code)] // os_boot-only API
+pub const DEV_RIGHT_MMIO_WRITE: u16 = 1 << 2;
+#[allow(dead_code)] // os_boot-only API
+pub const DEV_RIGHT_DMA_READ: u16 = 1 << 3;
+#[allow(dead_code)] // os_boot-only API
+pub const DEV_RIGHT_DMA_WRITE: u16 = 1 << 4;
+#[allow(dead_code)] // os_boot-only API
+pub const DEV_RIGHT_IRQ_RECEIVE: u16 = 1 << 5;
+#[allow(dead_code)] // os_boot-only API
+pub const DEV_RIGHT_DRIVER_CONTROL: u16 = 1 << 6;
+
+/// Boot-time device capability constructor (docs/31 §10).
+#[allow(dead_code)] // os_boot-only API
+pub const fn cap_device(object_id: u32, rights: u16) -> Cap {
+    Cap {
+        otype: OTYPE_DEVICE,
+        object_id,
+        rights,
+    }
+}
 
 /// Outcome of a capability lookup (fixed check order, docs/06 §4).
 /// On success carries the resolved endpoint id.
@@ -838,6 +867,85 @@ fn ipc_recv(frame: &mut TrapFrame) {
     }
 }
 
+// ---- Device objects (AXIOM-DRV-002; docs/31 §6) --------------------------
+
+/// One kernel device object: identity plus the MMIO window, IRQ route,
+/// and DMA buffer a driver may be granted mediated access to. Static,
+/// frozen at build time; carries no device protocol policy (docs/31
+/// §11). The host-testable twin is `kernel::device`.
+#[allow(dead_code)] // region/route fields consumed by AXIOM-DRV-003..005
+struct DeviceDef {
+    name: &'static str,
+    kind: &'static str,
+    mmio_name: &'static str,
+    /// Physical base of the MMIO register window (docs/31 §7). User
+    /// code never sees it — only offsets inside the window.
+    mmio_base: u64,
+    mmio_size: u64,
+    /// Endpoint the device's (synthetic) IRQ line is routed to
+    /// (docs/31 §9).
+    irq_endpoint: u32,
+    irq_name: &'static str,
+    dma_name: &'static str,
+    dma_size: u64,
+}
+
+/// The kernel device table (docs/31 §6). v1.5: one device, `block0`,
+/// on the first virtio-mmio transport window of QEMU virt (docs/30 §1).
+/// The window is real; the device behind it is not driven in v1.5.
+static DEVICES: [DeviceDef; 1] = [DeviceDef {
+    name: "block0",
+    kind: "block_skeleton",
+    mmio_name: "virtio_mmio0",
+    mmio_base: 0x1000_1000,
+    mmio_size: 0x200,
+    irq_endpoint: 8,
+    irq_name: "driver_irq",
+    dma_name: "block0_dma",
+    dma_size: 4096,
+}];
+
+/// Resolve `cap_index` in task `cur`'s table for a **device** capability
+/// with the `required` rights, in the fixed order of docs/06 §4:
+/// bounds → occupancy → object type → device id known → rights. On
+/// success returns the device id the capability names. This lookup runs
+/// before any device operation touches anything (docs/31 §10).
+#[allow(dead_code)] // wired to the device syscalls by AXIOM-DRV-003
+fn device_cap_check(cur: usize, cap_index: usize, required: u16) -> CapCheck {
+    let tasks = tasks_mut();
+    if cap_index >= CAPS_PER_TASK {
+        return CapCheck::InvalidCap;
+    }
+    match tasks[cur].caps[cap_index] {
+        None => CapCheck::InvalidCap,
+        Some(c) if c.otype != OTYPE_DEVICE => CapCheck::WrongType,
+        Some(c) if c.object_id as usize >= DEVICES.len() => CapCheck::InvalidCap,
+        Some(c) if c.rights & required != required => CapCheck::InsufficientRights,
+        Some(c) => CapCheck::Ok(c.object_id),
+    }
+}
+
+/// Announce the static device table and its IRQ routes (boot-time,
+/// docs/31 §6/§9). Mechanism only: registration mints no capability.
+#[allow(dead_code)] // os_boot-only API
+pub fn register_devices() {
+    let mut i = 0usize;
+    while i < DEVICES.len() {
+        let d = &DEVICES[i];
+        uart::put_str("DEVICE registered=");
+        uart::put_str(d.name);
+        uart::put_str(" kind=");
+        uart::put_str(d.kind);
+        uart::put_str("\n");
+        uart::put_str("IRQ registered source=");
+        uart::put_str(d.name);
+        uart::put_str(" endpoint=");
+        uart::put_str(d.irq_name);
+        uart::put_str("\n");
+        i += 1;
+    }
+}
+
 // ---- Supervisor / logger notification (AXIOM-SUPRT-005/008) -------------
 
 /// Deliver a one-byte notification to whatever task is blocked receiving
@@ -1251,6 +1359,7 @@ fn info_caps(out: &mut InfoBuf) {
                 OTYPE_CONSOLE => " console",
                 OTYPE_CONTROL => " control",
                 OTYPE_INFO => " info",
+                OTYPE_DEVICE => " device",
                 _ => " ?",
             });
         }

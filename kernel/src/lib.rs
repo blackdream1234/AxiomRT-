@@ -32,5 +32,9 @@ pub mod caps;
 // Fault events and recovery model (Phase 10, docs/06_FAULT_MODEL.md).
 pub mod fault;
 
+// Device objects and device capabilities (Phase v1.5,
+// docs/31_USER_SPACE_DRIVER_FRAMEWORK.md).
+pub mod device;
+
 // Runtime monitoring events (Phase 11, docs/11_RUNTIME_MONITORING.md).
 pub mod monitor;

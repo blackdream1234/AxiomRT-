@@ -254,6 +254,9 @@ pub fn os_boot() -> ! {
     // SAFETY: boot-time, single hart, called once.
     unsafe { dispatch::set_service_table(table) };
 
+    // Device objects and their IRQ routes (docs/31 §6; AXIOM-DRV-002).
+    dispatch::register_devices();
+
     // init_service: slot 0, highest priority, task-control capability.
     let uas =
         paging_hw::build_service_address_space(0, init_body as *const () as u64, stack_phys(0));
