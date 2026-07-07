@@ -269,6 +269,13 @@ pub fn os_boot() -> ! {
     table[5].stack_phys = stack_phys(6);
     table[5].caps[0] = Some(cap_endpoint(EP_APP, CAP_RIGHT_RECV | CAP_RIGHT_SEND));
     table[5].caps[1] = Some(cap_control());
+    // v1.6 loader path (docs/33 §7): fetch /bin records through
+    // fs_service, and a console grant for load/reject evidence lines.
+    table[5].caps[2] = Some(cap_endpoint(
+        EP_FS,
+        CAP_RIGHT_SEND | CAP_RIGHT_RECV | CAP_RIGHT_FS_READ,
+    ));
+    table[5].caps[3] = Some(cap_console(CAP_RIGHT_SEND));
     // Applications (docs/27 §5): manifest capability grants only.
     table[6].entry = hello_body as *const () as u64;
     table[6].stack_phys = stack_phys(7);
@@ -648,6 +655,114 @@ umsg!(A_ERR, A_ERR_LEN, b"error: cannot start");
 umsg!(A_UNKNOWN, A_UNKNOWN_LEN, b"unknown app");
 umsg!(A_BADCMD, A_BADCMD_LEN, b"unknown app command");
 
+// Loader IPC protocol (docs/32 §6, AXIOM-LOAD-005): bounded shell ->
+// loader messages; every reply is a single bounded line. The kernel
+// never sees any of this vocabulary.
+umsg!(PL_LIST, PL_LIST_LEN, b"APP_LIST");
+umsg!(PL_INFO, PL_INFO_LEN, b"APP_INFO ");
+umsg!(PL_LOAD, PL_LOAD_LEN, b"APP_LOAD ");
+umsg!(PL_RUN, PL_RUN_LEN, b"APP_RUN ");
+umsg!(PL_UNLOAD, PL_UNLOAD_LEN, b"APP_UNLOAD ");
+umsg!(PL_STATE, PL_STATE_LEN, b"APP_STATE ");
+umsg!(LD_BIN_PRE, LD_BIN_PRE_LEN, b"CAT /bin/");
+umsg!(LD_APP_SUF, LD_APP_SUF_LEN, b".app");
+umsg!(LD_ERRPRE, LD_ERRPRE_LEN, b"ERR");
+umsg!(R_ENOTLD, R_ENOTLD_LEN, b"ERR not_loaded");
+
+/// Copy `[src, src+len)` into `dst+at`, returning the new offset.
+/// Bounded by the callers (all loader buffers are 64 bytes).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_append(dst: *mut u8, at: usize, src: *const u8, len: usize) -> usize {
+    let mut q = at;
+    let mut i = 0usize;
+    while i < len && q < 63 {
+        // SAFETY: bounded copy inside 64-byte loader buffers.
+        unsafe { write_volatile(dst.add(q), read_volatile(src.add(i))) };
+        q += 1;
+        i += 1;
+    }
+    q
+}
+
+/// Fetch `/bin/<name>.app` through fs_service on the loader's fs
+/// capability (slot 2, docs/33 §7). Returns the record length in `rp`,
+/// or -1 for any transport failure or fs `ERR ...` reply.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_fetch(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8) -> i64 {
+    if nl == 0 || nl > 27 {
+        return -1;
+    }
+    let q = ld_append(qp, 0, addr_of!(LD_BIN_PRE) as *const u8, LD_BIN_PRE_LEN);
+    let q = ld_append(qp, q, name, nl);
+    let q = ld_append(qp, q, addr_of!(LD_APP_SUF) as *const u8, LD_APP_SUF_LEN);
+    if sys3(SYS_SEND, 2, qp as u64, q as u64) < 0 {
+        return -1;
+    }
+    let rr = sys3(SYS_RECV, 2, rp as u64, 64);
+    if rr <= 0
+        || starts_with(
+            rp,
+            rr as usize,
+            addr_of!(LD_ERRPRE) as *const u8,
+            LD_ERRPRE_LEN,
+        )
+    {
+        return -1;
+    }
+    rr
+}
+
+/// `APP_LOAD <name>`: fetch the record and reply (validation lands
+/// with AXIOM-LOAD-006; until then a fetched record answers
+/// `ERR malformed` so nothing can be marked loaded prematurely).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_load(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8) {
+    if ld_fetch(name, nl, qp, rp) < 0 {
+        app_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+    } else {
+        app_reply(addr_of!(S_E_MAL) as *const u8, S_E_MAL_LEN);
+    }
+}
+
+/// `APP_RUN <name>` (state machine lands with AXIOM-LOAD-007).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_run(_name: *const u8, _nl: usize, _qp: *mut u8) {
+    app_reply(addr_of!(R_ENOTLD) as *const u8, R_ENOTLD_LEN);
+}
+
+/// `APP_UNLOAD <name>` (state machine lands with AXIOM-LOAD-007).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_unload(_name: *const u8, _nl: usize, _qp: *mut u8) {
+    app_reply(addr_of!(R_ENOTLD) as *const u8, R_ENOTLD_LEN);
+}
+
+/// `APP_STATE <name>` (state machine lands with AXIOM-LOAD-007).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_state(_name: *const u8, _nl: usize, _qp: *mut u8) {
+    app_reply(addr_of!(R_ENOTLD) as *const u8, R_ENOTLD_LEN);
+}
+
+/// `APP_INFO <name>` / legacy `app info <name>`: manifest one-liner.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_info(p: *const u8, m: usize) {
+    if eqs(p, m, addr_of!(A_HELLO) as *const u8, A_HELLO_LEN) {
+        app_reply(addr_of!(AI_HELLO) as *const u8, AI_HELLO_LEN);
+    } else if eqs(p, m, addr_of!(A_FAULT) as *const u8, A_FAULT_LEN) {
+        app_reply(addr_of!(AI_FAULT) as *const u8, AI_FAULT_LEN);
+    } else if eqs(p, m, addr_of!(A_COUNTER) as *const u8, A_COUNTER_LEN) {
+        app_reply(addr_of!(AI_COUNTER) as *const u8, AI_COUNTER_LEN);
+    } else {
+        app_reply(addr_of!(A_UNKNOWN) as *const u8, A_UNKNOWN_LEN);
+    }
+}
+
 /// One bounded reply to the shell over the app channel.
 #[link_section = ".user.text"]
 #[inline(never)]
@@ -661,6 +776,10 @@ fn app_reply(p: *const u8, len: usize) {
 extern "C" fn app_loader_body() -> ! {
     let mut buf = MaybeUninit::<[u8; 64]>::uninit();
     let bp = addr_of_mut!(buf) as *mut u8;
+    let mut req = MaybeUninit::<[u8; 64]>::uninit();
+    let qp = addr_of_mut!(req) as *mut u8;
+    let mut rec = MaybeUninit::<[u8; 64]>::uninit();
+    let rp = addr_of_mut!(rec) as *mut u8;
     loop {
         let r = sys3(SYS_RECV, 0, bp as u64, 64);
         if r <= 0 {
@@ -670,17 +789,39 @@ extern "C" fn app_loader_body() -> ! {
         if eqs(bp, n, addr_of!(C_APPS) as *const u8, C_APPS_LEN) {
             app_reply(addr_of!(A_LIST) as *const u8, A_LIST_LEN);
         } else if starts_with(bp, n, addr_of!(C_APPINFO) as *const u8, C_APPINFO_LEN) {
-            let p = unsafe { bp.add(C_APPINFO_LEN) } as *const u8;
-            let m = n - C_APPINFO_LEN;
-            if eqs(p, m, addr_of!(A_HELLO) as *const u8, A_HELLO_LEN) {
-                app_reply(addr_of!(AI_HELLO) as *const u8, AI_HELLO_LEN);
-            } else if eqs(p, m, addr_of!(A_FAULT) as *const u8, A_FAULT_LEN) {
-                app_reply(addr_of!(AI_FAULT) as *const u8, AI_FAULT_LEN);
-            } else if eqs(p, m, addr_of!(A_COUNTER) as *const u8, A_COUNTER_LEN) {
-                app_reply(addr_of!(AI_COUNTER) as *const u8, AI_COUNTER_LEN);
-            } else {
-                app_reply(addr_of!(A_UNKNOWN) as *const u8, A_UNKNOWN_LEN);
-            }
+            ld_info(
+                unsafe { bp.add(C_APPINFO_LEN) } as *const u8,
+                n - C_APPINFO_LEN,
+            );
+        } else if eqs(bp, n, addr_of!(PL_LIST) as *const u8, PL_LIST_LEN) {
+            app_reply(addr_of!(A_LIST) as *const u8, A_LIST_LEN);
+        } else if starts_with(bp, n, addr_of!(PL_INFO) as *const u8, PL_INFO_LEN) {
+            ld_info(unsafe { bp.add(PL_INFO_LEN) } as *const u8, n - PL_INFO_LEN);
+        } else if starts_with(bp, n, addr_of!(PL_LOAD) as *const u8, PL_LOAD_LEN) {
+            ld_load(
+                unsafe { bp.add(PL_LOAD_LEN) } as *const u8,
+                n - PL_LOAD_LEN,
+                qp,
+                rp,
+            );
+        } else if starts_with(bp, n, addr_of!(PL_RUN) as *const u8, PL_RUN_LEN) {
+            ld_run(
+                unsafe { bp.add(PL_RUN_LEN) } as *const u8,
+                n - PL_RUN_LEN,
+                qp,
+            );
+        } else if starts_with(bp, n, addr_of!(PL_UNLOAD) as *const u8, PL_UNLOAD_LEN) {
+            ld_unload(
+                unsafe { bp.add(PL_UNLOAD_LEN) } as *const u8,
+                n - PL_UNLOAD_LEN,
+                qp,
+            );
+        } else if starts_with(bp, n, addr_of!(PL_STATE) as *const u8, PL_STATE_LEN) {
+            ld_state(
+                unsafe { bp.add(PL_STATE_LEN) } as *const u8,
+                n - PL_STATE_LEN,
+                qp,
+            );
         } else if starts_with(bp, n, addr_of!(C_RUNSP) as *const u8, C_RUNSP_LEN) {
             let p = unsafe { bp.add(C_RUNSP_LEN) } as *const u8;
             let m = n - C_RUNSP_LEN;
