@@ -27,13 +27,14 @@ docs/01_SCOPE_AND_NON_GOALS.md.
 
 ## 3. Current phase
 
-* **Current milestone:** `v1.3-readonly-fs` — user-space read-only
-  filesystem service: `ls`/`cat` in the shell over bounded IPC, zero
-  filesystem logic in the kernel (docs/28). Earlier: `v1.2-app-loader`
-  (apps by name via user-space loader, docs/27), `v1.1-os-shell`
-  (interactive `axiom>`), `v1.0.1-clean`, `v1.0-industrial-eval`.
-* **Next milestone:** storage service investigation (QEMU virtio-blk,
-  user-space block driver).
+* **Current milestone:** `v1.4-storage-service` — user-space storage
+  service: block protocol over bounded IPC, `storage info`/`storage
+  read` in the shell, `cat /storage/version` via the
+  shell→fs→storage chain, virtio-blk path investigated (docs/29,
+  docs/30). Earlier: `v1.3-readonly-fs`, `v1.2-app-loader`,
+  `v1.1-os-shell`, `v1.0.1-clean`, `v1.0-industrial-eval`.
+* **Next milestone:** `v1.5-user-space-driver-framework` (device
+  capability, MMIO grant, IRQ event delivery, driver_manager).
 * **Next product direction:** real OS completion
   (`AxiomrtFull Completion Mode.md` — user-facing shell, application
   loading, filesystem/storage services, host tooling).

@@ -1,0 +1,17 @@
+building os_boot kernel
+    Finished `release` profile [optimized] target(s) in 0.00s
+booting QEMU (scripted storage session)
+ok: found "SERVICE started=storage_service"
+ok: found "axiom> "
+ok: found "OK block_size=48 blocks=8 readonly=true"
+ok: found "OK data=AXSTOR v1 blocks=8 bs=48 ro=1"
+ok: found "ERR bad_block"
+ok: found "ERR malformed"
+ok: found "OK data=AxiomRT v1.4-storage-service evaluation stage"
+ok: found "caps task=shell_service endpoint console info control endpoint endpoint endpoint"
+ok: found "hello from app: hello"
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
+ok: no kernel panic
+restoring default build
+PASS: storage service test
