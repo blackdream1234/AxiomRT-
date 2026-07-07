@@ -42,6 +42,7 @@ const SYS_MMIO_READ: u64 = 16;
 const SYS_MMIO_WRITE: u64 = 17;
 const SYS_DMA_READ: u64 = 18;
 const SYS_DMA_WRITE: u64 = 19;
+const SYS_IRQ_RAISE: u64 = 20;
 
 // Result codes returned in a0 (docs/04_SYSCALL_MODEL.md).
 const ERR_INVALID_CAP: i64 = -2;
@@ -263,8 +264,10 @@ enum Ep {
 
 /// Endpoint ids used on target: 0 = app channel (docs/27), 1 = shell
 /// line channel / demo log, 2 = fault channel, 3 = event channel,
-/// 4 = filesystem channel (docs/28), 5 = storage channel (docs/29).
-const NUM_ENDPOINTS: usize = 6;
+/// 4 = filesystem channel (docs/28), 5 = storage channel (docs/29),
+/// 6 = driver-manager channel, 7 = driver command channel, 8 = driver
+/// IRQ events (docs/31).
+const NUM_ENDPOINTS: usize = 9;
 static mut ENDPOINTS: [Ep; NUM_ENDPOINTS] = [Ep::Idle; NUM_ENDPOINTS];
 /// Kernel staging buffer for user send→recv copies (bounded, no shared
 /// memory, docs/17 §2).
@@ -628,6 +631,10 @@ pub fn on_syscall(num: u64, frame: &mut TrapFrame) -> bool {
             sys_dma_write(frame);
             true
         }
+        SYS_IRQ_RAISE => {
+            sys_irq_raise(frame);
+            true
+        }
         _ => false,
     }
 }
@@ -735,6 +742,7 @@ pub fn watchdog_tick(frame: &mut TrapFrame) -> bool {
     emit("FAULT type=WatchdogTimeout task=", cur_name);
     uart::put_str("CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive\n");
     tasks_mut()[cur].state = RtState::Faulted;
+    irq_drop_for_task(cur);
     // Notify the supervisor (fault channel) and logger (event channel)
     // if they are waiting (AXIOM-SUPRT-005/008).
     notify_supervisor_and_logger(cur_name);
@@ -772,6 +780,7 @@ pub fn contain_fault(frame: &mut TrapFrame, reason: &str) -> bool {
     uart::put_str(reason);
     uart::put_str(" action=faulted kernel=alive\n");
     tasks_mut()[cur].state = RtState::Faulted;
+    irq_drop_for_task(cur);
     notify_supervisor_and_logger(cur_name);
     match select_highest(cur) {
         Some(next) => {
@@ -875,6 +884,28 @@ fn ipc_recv(frame: &mut TrapFrame) {
             return;
         }
     };
+
+    // Recv-side IRQ delivery (docs/31 §9): a pending device event on
+    // this endpoint goes to its registered receiver immediately. The
+    // receiver's satp is active, so the one-byte copy happens now.
+    if let Some(dev) = irq_pending_for(ep_id, cur) {
+        if cap < 1 || !valid_user_buf(dst, 1) {
+            frame.set_a0(ERR_INVALID_ARG);
+            emit("IPC_DENIED op=recv reason=bad_buffer task=", cur_name);
+            return;
+        }
+        irq_route_set(
+            dev,
+            IrqRoute {
+                receiver: cur,
+                pending: false,
+            },
+        );
+        copy_bytes_to_user(dst, &[IRQ_EVENT_CODE]);
+        emit_irq_delivered(cur_name, DEVICES[dev].name);
+        frame.set_a0(1);
+        return;
+    }
 
     match ep_get(ep_id) {
         Ep::SenderWaiting { tid, len } => {
@@ -1016,9 +1047,11 @@ fn device_check_err(check: CapCheck) -> (i64, &'static str) {
     }
 }
 
-/// Log the device grants a starting task was minted (docs/31 §7/§8):
-/// authority is explicit and evidence-visible, never ambient. Called
-/// once per task, on the first (minting) start.
+/// Apply and log the device grants a starting task was minted
+/// (docs/31 §7/§8/§9): authority is explicit and evidence-visible,
+/// never ambient. Registers the task as its device's IRQ receiver when
+/// the grant carries `irq_receive`. Called once per task, on the first
+/// (minting) start.
 fn announce_device_grants(slot: usize) {
     let tasks = tasks_mut();
     let mut i = 0usize;
@@ -1026,6 +1059,16 @@ fn announce_device_grants(slot: usize) {
         if let Some(c) = tasks[slot].caps[i] {
             if c.otype == OTYPE_DEVICE && (c.object_id as usize) < DEVICES.len() {
                 let d = &DEVICES[c.object_id as usize];
+                if c.rights & DEV_RIGHT_IRQ_RECEIVE != 0 {
+                    let route = irq_route(c.object_id as usize);
+                    irq_route_set(
+                        c.object_id as usize,
+                        IrqRoute {
+                            receiver: slot,
+                            pending: route.pending,
+                        },
+                    );
+                }
                 if c.rights & (DEV_RIGHT_MMIO_READ | DEV_RIGHT_MMIO_WRITE) != 0 {
                     uart::put_str("MMIO grant task=");
                     uart::put_str(tasks[slot].name);
@@ -1048,6 +1091,159 @@ fn announce_device_grants(slot: usize) {
         }
         i += 1;
     }
+}
+
+// ---- IRQ event delivery (AXIOM-DRV-005; docs/31 §9) ----------------------
+
+/// The bounded one-byte device event delivered to a driver.
+const IRQ_EVENT_CODE: u8 = 0x10;
+/// sys_irq_raise result: event held pending (receiver alive, not
+/// waiting). 0 = delivered now; ERR_NO_SLOT = dropped, receiver dead —
+/// which is how driver_manager observes driver death (docs/31 §9).
+const IRQ_PENDING: i64 = 1;
+
+/// One synthetic IRQ route: the registered receiver task (MAX_TASKS =
+/// none yet) plus the coalesced pending bit. Delivery state lives here
+/// and in the route's endpoint waiter slot only — it can never touch
+/// unrelated endpoint state (docs/31 §9).
+#[derive(Clone, Copy)]
+struct IrqRoute {
+    receiver: usize,
+    pending: bool,
+}
+
+/// One route per device table entry.
+static mut IRQ_ROUTES: [IrqRoute; 1] = [IrqRoute {
+    receiver: MAX_TASKS,
+    pending: false,
+}];
+
+fn irq_route(dev: usize) -> IrqRoute {
+    // SAFETY: single-hart, non-reentrant dispatcher state.
+    unsafe { (*addr_of!(IRQ_ROUTES))[dev] }
+}
+fn irq_route_set(dev: usize, r: IrqRoute) {
+    // SAFETY: single-hart, non-reentrant dispatcher state.
+    unsafe { (*addr_of_mut!(IRQ_ROUTES))[dev] = r };
+}
+
+fn emit_irq_delivered(to: &str, source: &str) {
+    uart::put_str("IRQ delivered to=");
+    uart::put_str(to);
+    uart::put_str(" source=");
+    uart::put_str(source);
+    uart::put_str("\n");
+}
+
+/// Raise the synthetic IRQ of device `dev` (docs/31 §9): deliver now if
+/// the authorized driver is blocked receiving on the route's endpoint,
+/// hold it pending (coalesced) if the driver is alive but busy, drop it
+/// loudly if the driver is dead. Only the registered receiver is ever
+/// delivered to.
+fn irq_raise(dev: usize) -> i64 {
+    let d = &DEVICES[dev];
+    let route = irq_route(dev);
+    let tasks = tasks_mut();
+    let dead = route.receiver >= MAX_TASKS
+        || matches!(
+            tasks[route.receiver].state,
+            RtState::Faulted | RtState::Killed | RtState::Empty
+        );
+    if dead {
+        irq_route_set(
+            dev,
+            IrqRoute {
+                receiver: route.receiver,
+                pending: false,
+            },
+        );
+        uart::put_str("IRQ_DROPPED reason=driver_not_ready\n");
+        return ERR_NO_SLOT;
+    }
+    if let Ep::ReceiverWaiting { tid, dst, cap } = ep_get(d.irq_endpoint) {
+        if tid == route.receiver && cap >= 1 && valid_user_buf(dst, 1) {
+            let mut pm = PendingMsg {
+                dst,
+                len: 1,
+                data: [0; IPC_MSG_MAX],
+            };
+            pm.data[0] = IRQ_EVENT_CODE;
+            tasks[tid].pending_ipc = Some(pm);
+            tasks[tid].state = RtState::Ready;
+            ep_set(d.irq_endpoint, Ep::Idle);
+            emit_irq_delivered(tasks[tid].name, d.name);
+            return 0;
+        }
+        // A waiter that is not the registered receiver (or handed an
+        // invalid buffer) never gets a device event; its wait state is
+        // left untouched and the event is dropped safely.
+        uart::put_str("IRQ_DROPPED reason=unauthorized_receiver\n");
+        return ERR_NO_SLOT;
+    }
+    irq_route_set(
+        dev,
+        IrqRoute {
+            receiver: route.receiver,
+            pending: true,
+        },
+    );
+    IRQ_PENDING
+}
+
+/// If endpoint `ep_id` is an IRQ route with a pending event for task
+/// `cur`, return the device index (recv-side delivery, docs/31 §9).
+fn irq_pending_for(ep_id: u32, cur: usize) -> Option<usize> {
+    let mut i = 0usize;
+    while i < DEVICES.len() {
+        if DEVICES[i].irq_endpoint == ep_id {
+            let route = irq_route(i);
+            if route.pending && route.receiver == cur {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Drop policy on driver death (docs/31 §9): a Faulted/Killed driver
+/// cannot service its device, so its pending event is dropped loudly —
+/// never queued across a restart. Called from the fault/kill paths.
+fn irq_drop_for_task(slot: usize) {
+    let mut i = 0usize;
+    while i < DEVICES.len() {
+        let route = irq_route(i);
+        if route.receiver == slot && route.pending {
+            irq_route_set(
+                i,
+                IrqRoute {
+                    receiver: route.receiver,
+                    pending: false,
+                },
+            );
+            uart::put_str("IRQ_DROPPED reason=driver_not_ready\n");
+        }
+        i += 1;
+    }
+}
+
+/// sys_irq_raise: a0 = device cap index. Requires `driver_control` —
+/// held only by driver_manager in v1.5 (docs/31 §10). Synthetic
+/// injection standing in for a real PLIC interrupt; doubles as the
+/// manager's liveness probe via its result code.
+fn sys_irq_raise(frame: &mut TrapFrame) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let cap_index = frame.regs[9] as usize; // a0
+    let dev_id = match device_cap_check(cur, cap_index, DEV_RIGHT_DRIVER_CONTROL) {
+        CapCheck::Ok(id) => id,
+        other => {
+            let (code, reason) = device_check_err(other);
+            deny_device_op(cur, "IRQ_DENIED", reason);
+            frame.set_a0(code);
+            return;
+        }
+    };
+    frame.set_a0(irq_raise(dev_id as usize));
 }
 
 // ---- DMA-visible buffer grant (AXIOM-DRV-004; docs/31 §8) ----------------
@@ -1751,6 +1947,7 @@ fn sys_task_kill(frame: &mut TrapFrame) {
     }
     tasks[slot].state = RtState::Killed;
     tasks[slot].pending_ipc = None;
+    irq_drop_for_task(slot);
     ring_push(EV_KILLED, slot);
     emit("TASK_KILLED task=", tasks[slot].name);
     if slot == cur {

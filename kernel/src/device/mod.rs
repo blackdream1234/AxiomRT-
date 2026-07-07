@@ -179,6 +179,38 @@ impl<const N: usize> DeviceTable<N> {
     }
 }
 
+/// Outcome of raising a device IRQ (docs/31 §9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IrqRaiseOutcome {
+    /// The registered receiver was blocked on the route's endpoint:
+    /// the bounded one-byte event is delivered now.
+    Delivered,
+    /// The receiver is alive but busy: the event is held pending
+    /// (coalesced to one bit; re-raising is idempotent).
+    Pending,
+    /// No registered receiver, or the receiver is dead: the event is
+    /// dropped loudly, never queued across a restart.
+    Dropped,
+}
+
+/// Decision rule for synthetic IRQ raising (docs/31 §9). Pure policy
+/// mirror of the on-target dispatcher: a dead or unregistered receiver
+/// always drops — delivery never resurrects state.
+pub fn irq_raise_outcome(
+    receiver_registered: bool,
+    receiver_alive: bool,
+    receiver_waiting: bool,
+) -> IrqRaiseOutcome {
+    if !receiver_registered || !receiver_alive {
+        return IrqRaiseOutcome::Dropped;
+    }
+    if receiver_waiting {
+        IrqRaiseOutcome::Delivered
+    } else {
+        IrqRaiseOutcome::Pending
+    }
+}
+
 /// Validate one mediated access of `width` bytes at `offset` inside a
 /// region of `size` bytes: width ∈ {1,2,4}, aligned, in bounds
 /// (docs/31 §7/§8). Pure bounds logic shared by the MMIO and DMA
@@ -365,6 +397,21 @@ mod tests {
             t.check(Some(&mmio_only), DeviceId(0), DeviceRights::DMA_READ),
             Err(DeviceAccessError::InsufficientRights)
         );
+    }
+
+    /// AXIOM-DRV-005: the IRQ raise decision table (docs/31 §9).
+    #[test]
+    fn irq_raise_policy_matches_documented_table() {
+        use IrqRaiseOutcome::*;
+        // Alive and waiting → delivered; alive and busy → pending.
+        assert_eq!(irq_raise_outcome(true, true, true), Delivered);
+        assert_eq!(irq_raise_outcome(true, true, false), Pending);
+        // Dead receiver drops, even if a stale wait state existed.
+        assert_eq!(irq_raise_outcome(true, false, true), Dropped);
+        assert_eq!(irq_raise_outcome(true, false, false), Dropped);
+        // No registered receiver ever gets an event.
+        assert_eq!(irq_raise_outcome(false, true, true), Dropped);
+        assert_eq!(irq_raise_outcome(false, false, false), Dropped);
     }
 
     #[test]
