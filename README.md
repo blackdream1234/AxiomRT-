@@ -27,13 +27,13 @@ docs/01_SCOPE_AND_NON_GOALS.md.
 
 ## 3. Current phase
 
-* **Current milestone:** `v1.2-app-loader` — application model: the
-  shell lists and starts isolated apps by name (hello / fault_demo /
-  counter) through the user-space app loader (docs/27). Earlier
-  milestones: `v1.1-os-shell` (interactive `axiom>` OS boot flow),
-  `v1.0.1-clean`, `v1.0-industrial-eval` (tags `v0.1-final` …).
-* **Next milestone:** filesystem service (read-only embedded archive,
-  `ls`/`cat` in the shell).
+* **Current milestone:** `v1.3-readonly-fs` — user-space read-only
+  filesystem service: `ls`/`cat` in the shell over bounded IPC, zero
+  filesystem logic in the kernel (docs/28). Earlier: `v1.2-app-loader`
+  (apps by name via user-space loader, docs/27), `v1.1-os-shell`
+  (interactive `axiom>`), `v1.0.1-clean`, `v1.0-industrial-eval`.
+* **Next milestone:** storage service investigation (QEMU virtio-blk,
+  user-space block driver).
 * **Next product direction:** real OS completion
   (`AxiomrtFull Completion Mode.md` — user-facing shell, application
   loading, filesystem/storage services, host tooling).
