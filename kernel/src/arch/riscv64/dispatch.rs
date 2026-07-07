@@ -40,6 +40,8 @@ const SYS_SHUTDOWN: u64 = 14;
 const SYS_DEVICE_INFO: u64 = 15;
 const SYS_MMIO_READ: u64 = 16;
 const SYS_MMIO_WRITE: u64 = 17;
+const SYS_DMA_READ: u64 = 18;
+const SYS_DMA_WRITE: u64 = 19;
 
 // Result codes returned in a0 (docs/04_SYSCALL_MODEL.md).
 const ERR_INVALID_CAP: i64 = -2;
@@ -618,6 +620,14 @@ pub fn on_syscall(num: u64, frame: &mut TrapFrame) -> bool {
             sys_mmio_write(frame);
             true
         }
+        SYS_DMA_READ => {
+            sys_dma_read(frame);
+            true
+        }
+        SYS_DMA_WRITE => {
+            sys_dma_write(frame);
+            true
+        }
         _ => false,
     }
 }
@@ -1025,10 +1035,101 @@ fn announce_device_grants(slot: usize) {
                     uart::put_str(d.mmio_name);
                     uart::put_str("\n");
                 }
+                if c.rights & (DEV_RIGHT_DMA_READ | DEV_RIGHT_DMA_WRITE) != 0 {
+                    uart::put_str("DMA grant task=");
+                    uart::put_str(tasks[slot].name);
+                    uart::put_str(" buffer=");
+                    uart::put_str(d.dma_name);
+                    uart::put_str(" size=");
+                    put_dec(d.dma_size);
+                    uart::put_str("\n");
+                }
             }
         }
         i += 1;
     }
+}
+
+// ---- DMA-visible buffer grant (AXIOM-DRV-004; docs/31 §8) ----------------
+
+#[repr(C, align(4096))]
+struct DmaPage([u8; 4096]);
+
+/// The modeled DMA-visible bounce buffer for block0 (docs/31 §8): one
+/// kernel-owned page, physically contiguous by construction and
+/// identity-mapped, so its kernel VA *is* its physical address — the
+/// property a future virtio driver needs. **No device masters it in
+/// v1.5**; access is exclusively through the capability-gated DMA
+/// syscalls, so a driver can never reach kernel memory outside the
+/// granted buffer and a user task can never nominate arbitrary memory
+/// as DMA.
+static mut BLOCK0_DMA: DmaPage = DmaPage([0; 4096]);
+
+/// Physical (= kernel virtual) base of a device's granted DMA buffer.
+/// v1.5: every registered device maps to the single bounce page.
+fn dma_base(_d: &DeviceDef) -> u64 {
+    addr_of!(BLOCK0_DMA) as u64
+}
+
+/// Shared body of the DMA syscalls: capability lookup (fixed order),
+/// then bounds/alignment against the granted DmaRegion, then the one
+/// access inside the kernel-owned bounce page.
+fn dma_access(frame: &mut TrapFrame, required: u16, write: bool) {
+    let cur = CURRENT.load(Ordering::SeqCst);
+    let cap_index = frame.regs[9] as usize; // a0
+    let offset = frame.regs[10]; // a1
+    let width = frame.regs[11]; // a2
+    let value = frame.regs[12]; // a3 (write only)
+    let dev_id = match device_cap_check(cur, cap_index, required) {
+        CapCheck::Ok(id) => id,
+        other => {
+            let (code, reason) = device_check_err(other);
+            deny_device_op(cur, "DMA_DENIED", reason);
+            frame.set_a0(code);
+            return;
+        }
+    };
+    let d = &DEVICES[dev_id as usize];
+    if !kernel::device::access_in_bounds(d.dma_size, offset, width) {
+        deny_device_op(cur, "DMA_DENIED", "out_of_range");
+        frame.set_a0(ERR_INVALID_ARG);
+        return;
+    }
+    let addr = dma_base(d) + offset;
+    if write {
+        // SAFETY: addr lies inside the kernel-owned bounce page;
+        // width/alignment validated above; single hart.
+        unsafe {
+            match width {
+                1 => write_volatile(addr as *mut u8, value as u8),
+                2 => write_volatile(addr as *mut u16, value as u16),
+                _ => write_volatile(addr as *mut u32, value as u32),
+            }
+        }
+        frame.set_a0(0);
+    } else {
+        // SAFETY: as above, read-only.
+        let v: u64 = unsafe {
+            match width {
+                1 => read_volatile(addr as *const u8) as u64,
+                2 => read_volatile(addr as *const u16) as u64,
+                _ => read_volatile(addr as *const u32) as u64,
+            }
+        };
+        frame.set_a0(v as i64);
+    }
+}
+
+/// sys_dma_read: a0 = device cap index, a1 = offset, a2 = width.
+/// Requires `dma_read` (docs/31 §8).
+fn sys_dma_read(frame: &mut TrapFrame) {
+    dma_access(frame, DEV_RIGHT_DMA_READ, false);
+}
+
+/// sys_dma_write: a0 = device cap index, a1 = offset, a2 = width,
+/// a3 = value. Requires `dma_write` (docs/31 §8).
+fn sys_dma_write(frame: &mut TrapFrame) {
+    dma_access(frame, DEV_RIGHT_DMA_WRITE, true);
 }
 
 /// sys_device_info: a0 = device cap index, a1 = buffer VA, a2 = max.

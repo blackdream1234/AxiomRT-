@@ -342,6 +342,31 @@ mod tests {
         );
     }
 
+    /// AXIOM-DRV-004: DMA access is confined to the granted buffer.
+    /// A driver cannot nominate memory outside the DmaRegion, and a
+    /// task without DMA rights never reaches the buffer at all.
+    #[test]
+    fn dma_access_is_confined_to_the_granted_buffer() {
+        let t = table();
+        let cap = DeviceCapability::new(
+            DeviceId(0),
+            DeviceRights::DMA_READ.union(DeviceRights::DMA_WRITE),
+        );
+        let dev = t
+            .check(Some(&cap), DeviceId(0), DeviceRights::DMA_WRITE)
+            .expect("dma capability resolves");
+        // Last legal word, then one byte past the buffer.
+        assert!(access_in_bounds(dev.dma.size, 4092, 4));
+        assert!(!access_in_bounds(dev.dma.size, 4093, 4));
+        assert!(!access_in_bounds(dev.dma.size, 4096, 1));
+        // MMIO rights do not imply DMA rights.
+        let mmio_only = DeviceCapability::new(DeviceId(0), DeviceRights::MMIO_READ);
+        assert_eq!(
+            t.check(Some(&mmio_only), DeviceId(0), DeviceRights::DMA_READ),
+            Err(DeviceAccessError::InsufficientRights)
+        );
+    }
+
     #[test]
     fn access_bounds_reject_misaligned_and_out_of_range() {
         // In bounds, aligned.
