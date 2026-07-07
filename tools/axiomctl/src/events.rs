@@ -19,6 +19,9 @@ pub enum Category {
     Timer,
     Service,
     Boot,
+    /// Driver framework events (docs/31): device registration, MMIO/
+    /// DMA grants and denials, IRQ delivery/drops, driver lifecycle.
+    Driver,
 }
 
 impl Category {
@@ -35,6 +38,7 @@ impl Category {
             Category::Timer => "timer",
             Category::Service => "service",
             Category::Boot => "boot",
+            Category::Driver => "driver",
         }
     }
 }
@@ -81,6 +85,9 @@ fn categorize(kind: &str, fields: &[(String, String)]) -> Option<Category> {
         "TIMER" => Category::Timer,
         "SUPERVISOR" | "LOGGER" => Category::Service,
         "MMU" | "BOOT" | "BOOT_INFO" => Category::Boot,
+        // Driver framework vocabulary (docs/31 §7-§9).
+        "DEVICE" | "DEVICE_DENIED" | "MMIO" | "MMIO_DENIED" | "DMA" | "DMA_DENIED" | "IRQ"
+        | "IRQ_DENIED" | "IRQ_DROPPED" | "DRIVER" | "DRIVER_MANAGER" => Category::Driver,
         _ => return None,
     })
 }
@@ -220,7 +227,7 @@ pub fn to_json(ev: &Event) -> String {
 
 /// Human-readable per-category / per-kind counts (docs/21 §3).
 pub fn summary(log: &ParsedLog) -> String {
-    const ORDER: [Category; 11] = [
+    const ORDER: [Category; 12] = [
         Category::Task,
         Category::Scheduler,
         Category::Syscall,
@@ -232,6 +239,7 @@ pub fn summary(log: &ParsedLog) -> String {
         Category::Timer,
         Category::Service,
         Category::Boot,
+        Category::Driver,
     ];
 
     let mut out = format!(
@@ -355,6 +363,53 @@ mod tests {
         let ev = parse_line("arch=riscv64").unwrap();
         assert_eq!(ev.kind, "BOOT_INFO");
         assert_eq!(field(&ev, "arch"), Some("riscv64"));
+    }
+
+    // Driver framework lines, verbatim from a v1.5 QEMU run (docs/31).
+    #[test]
+    fn driver_framework_lines_are_driver_category() {
+        let cases = [
+            "DEVICE registered=block0 kind=block_skeleton",
+            "IRQ registered source=block0 endpoint=driver_irq",
+            "MMIO grant task=block_driver_service device=block0 region=virtio_mmio0",
+            "DMA grant task=block_driver_service buffer=block0_dma size=4096",
+            "MMIO read task=block_driver_service device=block0 offset=0 value=0x74726976",
+            "MMIO_DENIED task=block_driver_service reason=insufficient_rights",
+            "MMIO_DENIED task=fault_demo reason=no_valid_capability",
+            "DMA_DENIED task=fault_demo reason=no_valid_capability",
+            "IRQ delivered to=block_driver_service source=block0",
+            "IRQ_DROPPED reason=driver_not_ready",
+            "DRIVER started=block_driver_service",
+            "DRIVER restarted=block_driver_service",
+            "DRIVER_MANAGER observed=fault driver=block_driver_service",
+        ];
+        for line in cases {
+            let ev = parse_line(line).unwrap_or_else(|| panic!("must parse: {line}"));
+            assert_eq!(ev.category, Category::Driver, "category of: {line}");
+        }
+        // Flags vs fields split: `grant` is a flag, task= a field.
+        let ev =
+            parse_line("MMIO grant task=block_driver_service device=block0 region=virtio_mmio0")
+                .unwrap();
+        assert_eq!(ev.flags, vec!["grant"]);
+        assert_eq!(field(&ev, "device"), Some("block0"));
+        assert_eq!(field(&ev, "region"), Some("virtio_mmio0"));
+    }
+
+    #[test]
+    fn driver_events_appear_in_summary() {
+        let log = parse_log(
+            "DEVICE registered=block0 kind=block_skeleton\n\
+             DRIVER started=block_driver_service\n\
+             IRQ delivered to=block_driver_service source=block0\n",
+        );
+        let s = summary(&log);
+        assert!(
+            s.contains("driver"),
+            "summary missing driver category:\n{s}"
+        );
+        assert!(s.contains("DEVICE x1"));
+        assert!(s.contains("DRIVER x1"));
     }
 
     #[test]

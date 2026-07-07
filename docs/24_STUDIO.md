@@ -62,8 +62,8 @@ authoritative scripts + cargo   (run_qemu flags, verify_all.sh,
 
 Every page path serves the same dashboard shell; the path selects the
 active panel: `/`, `/run`, `/tasks`, `/scheduler`, `/faults`, `/ipc`,
-`/capabilities`, `/tests`, `/proofs`, `/evidence`, `/limitations`,
-`/release`.
+`/capabilities`, `/drivers`, `/tests`, `/proofs`, `/evidence`,
+`/limitations`, `/release`.
 
 API (JSON unless noted):
 
@@ -93,6 +93,8 @@ API (JSON unless noted):
 6. Faults — FAULT/CONTAIN table.
 7. IPC — IPC event table.
 8. Capabilities — CAP_DENIED table.
+8b. Drivers — driver-framework events (docs/31): device registration,
+   MMIO/DMA grants and denials, IRQ delivery/drops, driver lifecycle.
 9. Tests — sections and PASS/FAIL from the verify log.
 10. Proofs — Coq section of the verify log + refinement-TODO notice.
 11. Evidence — version browser and file viewer.

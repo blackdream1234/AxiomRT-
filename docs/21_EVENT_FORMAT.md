@@ -45,6 +45,7 @@ KIND [flag ...] [key=value ...]
 | `TIMER` | timer | `TIMER tick=3` |
 | `SUPERVISOR` `LOGGER` | service | `SUPERVISOR decision=Kill by=supervisor_task` |
 | `MMU`, `AxiomRT kernel booted`, bare `key=value` boot lines | boot | `MMU status=enabled mode=sv39 scope=kernel` |
+| `DEVICE` `DEVICE_DENIED` `MMIO` `MMIO_DENIED` `DMA` `DMA_DENIED` `IRQ` `IRQ_DENIED` `IRQ_DROPPED` `DRIVER` `DRIVER_MANAGER` | driver | `MMIO grant task=block_driver_service device=block0 region=virtio_mmio0` (v1.5, docs/31) |
 
 Lines whose first token is not in this vocabulary (OpenSBI banner,
 cargo output, blank lines) are **skipped and counted**, never guessed

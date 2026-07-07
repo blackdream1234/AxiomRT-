@@ -26,6 +26,9 @@ COMMANDS:
     run              build and boot the kernel in QEMU (exit: Ctrl-A x)
     demo memory      run the memory-isolation demo (default build)
     demo full        run the full four-task fault-containment demo
+    demo drivers     boot the interactive OS (os_boot) for the driver
+                     framework: try drivers / driver info block /
+                     driver fault block / driver restart block
     verify           run the full verification sweep (QEMU + host + Coq)
     evidence list    list archived evidence versions
     evidence open <ver> [file]
@@ -55,6 +58,7 @@ fn main() -> ExitCode {
         ["run", rest @ ..] => cmd_run(rest),
         ["demo", "memory"] => cmd_demo(false),
         ["demo", "full"] => cmd_demo(true),
+        ["demo", "drivers"] => cmd_demo_drivers(),
         ["verify"] => cmd_verify(),
         ["evidence", "list"] => cmd_evidence_list(),
         ["evidence", "open", rest @ ..] => cmd_evidence_open(rest),
@@ -288,6 +292,55 @@ fn cmd_demo(full: bool) -> ExitCode {
         println!("axiomctl: memory-isolation demo is the default kernel build");
         cmd_run(&[])
     }
+}
+
+/// Boot the interactive OS build for the driver framework (docs/31):
+/// the operator lands on `axiom>` and can drive drivers / driver info
+/// block / driver fault block / driver restart block by hand.
+fn cmd_demo_drivers() -> ExitCode {
+    let root = match require_repo_root() {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    println!("axiomctl: building os_boot kernel (driver framework)");
+    let build = run_inherit(
+        &root,
+        "cargo",
+        &[
+            "build",
+            "--release",
+            "--features",
+            "os_boot",
+            "-p",
+            "kernel",
+        ],
+    );
+    if build != ExitCode::SUCCESS {
+        return build;
+    }
+    println!("axiomctl: booting interactive OS (exit: Ctrl-A then x)");
+    println!(
+        "axiomctl: try: drivers | driver info block | driver fault block | driver restart block"
+    );
+    println!("axiomctl: note — run `axiomctl build` afterwards to restore the default kernel");
+    // Keep in sync with scripts/run_qemu.sh.
+    run_inherit(
+        &root,
+        "qemu-system-riscv64",
+        &[
+            "-machine",
+            "virt",
+            "-smp",
+            "1",
+            "-m",
+            "128M",
+            "-nographic",
+            "-bios",
+            "default",
+            "-kernel",
+            "target/riscv64gc-unknown-none-elf/release/kernel",
+        ],
+    )
 }
 
 fn cmd_verify() -> ExitCode {

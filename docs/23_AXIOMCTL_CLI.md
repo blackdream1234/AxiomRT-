@@ -58,6 +58,7 @@ TCB, and makes no safety claim.
 | `axiomctl run` | Delegate to `scripts/run_qemu.sh` (builds default kernel, boots QEMU interactively; exit with Ctrl-A x). Extra args pass through to QEMU. |
 | `axiomctl demo memory` | The memory-isolation demo is the default build: build default features, boot QEMU. |
 | `axiomctl demo full` | `cargo build --release --features demo_full -p kernel`, then boot QEMU with the same flags as `run_qemu.sh` (which cannot be reused verbatim because it rebuilds the default features). Prints a reminder that the next `axiomctl build` restores the default kernel. |
+| `axiomctl demo drivers` | `cargo build --release --features os_boot -p kernel`, then boot the interactive OS in QEMU (v1.5 driver framework, docs/31): the operator drives `drivers` / `driver info block` / `driver fault block` / `driver restart block` at the `axiom>` prompt. Same restore reminder as `demo full`. |
 | `axiomctl verify` | Delegate to `scripts/verify_all.sh`; propagate its exit code. |
 | `axiomctl evidence list` | List `evidence/<version>/` directories with file counts. |
 | `axiomctl evidence open <ver> [file]` | List the files of one evidence directory; with `file`, print that file. |
