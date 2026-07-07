@@ -668,6 +668,24 @@ umsg!(LD_BIN_PRE, LD_BIN_PRE_LEN, b"CAT /bin/");
 umsg!(LD_APP_SUF, LD_APP_SUF_LEN, b".app");
 umsg!(LD_ERRPRE, LD_ERRPRE_LEN, b"ERR");
 umsg!(R_ENOTLD, R_ENOTLD_LEN, b"ERR not_loaded");
+umsg!(R_EBADIMG, R_EBADIMG_LEN, b"ERR bad_image");
+umsg!(R_EBADSUM, R_EBADSUM_LEN, b"ERR bad_checksum");
+umsg!(R_EDENCAP, R_EDENCAP_LEN, b"ERR denied_capability");
+umsg!(RP_LOADED, RP_LOADED_LEN, b"OK loaded ");
+// Record grammar tokens (docs/32 §3): magic+version prefix and the
+// v1.6 capability vocabulary.
+umsg!(LD_MAGIC, LD_MAGIC_LEN, b"AXAPP1 ");
+umsg!(W_CONSOLE, W_CONSOLE_LEN, b"console");
+umsg!(W_NONE, W_NONE_LEN, b"none");
+// Load/reject evidence line pieces (console).
+umsg!(L_OK, L_OK_LEN, b"APP_IMAGE loaded=");
+umsg!(L_SRC, L_SRC_LEN, b" source=/bin/");
+umsg!(L_REJ, L_REJ_LEN, b"APP_IMAGE rejected=");
+umsg!(L_RSN, L_RSN_LEN, b" reason=");
+umsg!(W_BADIMG, W_BADIMG_LEN, b"bad_image");
+umsg!(W_BADSUM, W_BADSUM_LEN, b"bad_checksum");
+umsg!(W_DENCAP, W_DENCAP_LEN, b"denied_capability");
+umsg!(W_MALF, W_MALF_LEN, b"malformed");
 
 /// Copy `[src, src+len)` into `dst+at`, returning the new offset.
 /// Bounded by the callers (all loader buffers are 64 bytes).
@@ -714,18 +732,267 @@ fn ld_fetch(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8) -> i64 {
     rr
 }
 
-/// `APP_LOAD <name>`: fetch the record and reply (validation lands
-/// with AXIOM-LOAD-006; until then a fetched record answers
-/// `ERR malformed` so nothing can be marked loaded prematurely).
+/// Reply `<prefix><name>` on the app channel (e.g. `OK loaded hello`).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_reply_name(pre: *const u8, plen: usize, name: *const u8, nl: usize, qp: *mut u8) {
+    let q = ld_append(qp, 0, pre, plen);
+    let q = ld_append(qp, q, name, nl);
+    sys3(SYS_SEND, 0, qp as u64, q as u64);
+}
+
+/// End of the token starting at `i`: first space, or `n`.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn tok_end(p: *const u8, i: usize, n: usize) -> usize {
+    let mut j = i;
+    while j < n {
+        // SAFETY: in-bounds read.
+        if unsafe { read_volatile(p.add(j)) } == b' ' {
+            break;
+        }
+        j += 1;
+    }
+    j
+}
+
+/// Parse exactly 4 lowercase hex digits at `[i, i+4)`; u32::MAX on any
+/// other input. Manual ranges: no core calls in U-mode.
+#[allow(clippy::manual_range_contains)]
+#[link_section = ".user.text"]
+#[inline(never)]
+fn parse_hex4(p: *const u8, i: usize) -> u32 {
+    let mut v: u32 = 0;
+    let mut k = 0usize;
+    while k < 4 {
+        // SAFETY: caller guarantees i+4 <= record length.
+        let b = unsafe { read_volatile(p.add(i + k)) };
+        let d = if b >= b'0' && b <= b'9' {
+            (b - b'0') as u32
+        } else if b >= b'a' && b <= b'f' {
+            (b - b'a' + 10) as u32
+        } else {
+            return u32::MAX;
+        };
+        v = (v << 4) | d;
+        k += 1;
+    }
+    v
+}
+
+/// 16-bit additive checksum over `[0, end)` (docs/32 §6 rule 4).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ck_sum(p: *const u8, end: usize) -> u32 {
+    let mut s: u32 = 0;
+    let mut i = 0usize;
+    while i < end {
+        // SAFETY: in-bounds read.
+        s = (s + unsafe { read_volatile(p.add(i)) } as u32) & 0xffff;
+        i += 1;
+    }
+    s
+}
+
+/// Expect a space at `j` followed by a decimal number; returns
+/// (value, index after the digits) or (u64::MAX, j) on bad input.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_num_after(p: *const u8, j: usize, n: usize) -> (u64, usize) {
+    // SAFETY: j < n checked before the read.
+    if j >= n || unsafe { read_volatile(p.add(j)) } != b' ' {
+        return (u64::MAX, j);
+    }
+    parse_dec_stop(p, j + 1, n)
+}
+
+/// Validate one fetched AXAPP1 record against the requested name in
+/// the fixed order of docs/32 §6. Result codes: 0 = valid,
+/// 1 = bad_image, 2 = bad_checksum, 3 = denied_capability,
+/// 4 = malformed, 5 = unknown app (not_found).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_validate(rp: *const u8, rl: usize, name: *const u8, nl: usize) -> u8 {
+    // (1) transport already bounds rl <= 64; need room for the header
+    // and the checksum tail.
+    if rl < LD_MAGIC_LEN + 6 {
+        return 4;
+    }
+    // (2) magic + version.
+    if !starts_with(rp, rl, addr_of!(LD_MAGIC) as *const u8, LD_MAGIC_LEN) {
+        return 1;
+    }
+    // (4) checksum: record must end in ` xxxx` (checked before field
+    // parsing so a corrupt record never drives the parser).
+    // SAFETY: rl >= 13 guarantees rl-5 is in bounds.
+    if unsafe { read_volatile(rp.add(rl - 5)) } != b' ' {
+        return 4;
+    }
+    let want = parse_hex4(rp, rl - 4);
+    if want == u32::MAX {
+        return 4;
+    }
+    if ck_sum(rp, rl - 5) != want {
+        return 2;
+    }
+    // (3) positional fields: name, then five numbers/tokens.
+    let i0 = LD_MAGIC_LEN;
+    let i1 = tok_end(rp, i0, rl);
+    if i1 <= i0 {
+        return 4;
+    }
+    // Record name must be the requested name (a mismatched record is
+    // a wrong image, not a transport error).
+    // SAFETY: token bounds computed above.
+    if !eqs(unsafe { rp.add(i0) }, i1 - i0, name, nl) {
+        return 1;
+    }
+    let (e, j1) = ld_num_after(rp, i1, rl);
+    let (t, j2) = ld_num_after(rp, j1, rl);
+    let (rd, j3) = ld_num_after(rp, j2, rl);
+    let (s, j4) = ld_num_after(rp, j3, rl);
+    if e == u64::MAX || t == u64::MAX || rd == u64::MAX || s == u64::MAX {
+        return 4;
+    }
+    // caps token.
+    // SAFETY: j4 < rl checked before the read.
+    if j4 >= rl || unsafe { read_volatile(rp.add(j4)) } != b' ' {
+        return 4;
+    }
+    let c0 = j4 + 1;
+    let c1 = tok_end(rp, c0, rl);
+    if c1 <= c0 {
+        return 4;
+    }
+    let (z, j5) = ld_num_after(rp, c1, rl);
+    if z == u64::MAX || j5 != rl - 5 {
+        return 4;
+    }
+    // (5) layout: bounded sizes, entry inside text, W^X by separation,
+    // stack within policy (docs/32 §6 rule 5).
+    if t == 0 || t > 65536 || rd > 65536 || z != t + rd || z > 131072 || e >= t || s != 1 {
+        return 1;
+    }
+    // (6) capability request: known word, within per-app policy.
+    // SAFETY: caps token bounds computed above.
+    let want_console = eqs(
+        unsafe { rp.add(c0) },
+        c1 - c0,
+        addr_of!(W_CONSOLE) as *const u8,
+        W_CONSOLE_LEN,
+    );
+    if !want_console
+        && !eqs(
+            unsafe { rp.add(c0) },
+            c1 - c0,
+            addr_of!(W_NONE) as *const u8,
+            W_NONE_LEN,
+        )
+    {
+        return 3;
+    }
+    // (7) known runnable app + its capability policy (docs/32 §5).
+    if eqs(name, nl, addr_of!(A_HELLO) as *const u8, A_HELLO_LEN)
+        || eqs(name, nl, addr_of!(A_COUNTER) as *const u8, A_COUNTER_LEN)
+    {
+        return 0; // policy: console allowed
+    }
+    if eqs(name, nl, addr_of!(A_FAULT) as *const u8, A_FAULT_LEN) {
+        if want_console {
+            return 3; // excessive request: fault_demo policy is none
+        }
+        return 0;
+    }
+    5
+}
+
+/// Rejection path: one console evidence line
+/// (`APP_IMAGE rejected=<name> reason=<word>`) plus the bounded error
+/// reply to the shell.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_reject(name: *const u8, nl: usize, word: *const u8, wl: usize, reply: *const u8, rl: usize) {
+    uput!(L_REJ, L_REJ_LEN);
+    uwrite_ptr(name, nl);
+    uput!(L_RSN, L_RSN_LEN);
+    uwrite_ptr(word, wl);
+    uput!(M_NL, M_NL_LEN);
+    app_reply(reply, rl);
+}
+
+/// `APP_LOAD <name>` (docs/32 §6): fetch through fs, validate in fixed
+/// order, answer exactly one bounded reply. Only full success reports
+/// loaded.
 #[link_section = ".user.text"]
 #[inline(never)]
 fn ld_load(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8) {
-    if ld_fetch(name, nl, qp, rp) < 0 {
+    let rr = ld_fetch(name, nl, qp, rp);
+    if rr < 0 {
         app_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+        return;
+    }
+    let code = ld_validate(rp, rr as usize, name, nl);
+    if code == 0 {
+        uput!(L_OK, L_OK_LEN);
+        uwrite_ptr(name, nl);
+        uput!(L_SRC, L_SRC_LEN);
+        uwrite_ptr(name, nl);
+        uput!(LD_APP_SUF, LD_APP_SUF_LEN);
+        uput!(M_NL, M_NL_LEN);
+        ld_mark_loaded(name, nl);
+        ld_reply_name(
+            addr_of!(RP_LOADED) as *const u8,
+            RP_LOADED_LEN,
+            name,
+            nl,
+            qp,
+        );
+    } else if code == 1 {
+        ld_reject(
+            name,
+            nl,
+            addr_of!(W_BADIMG) as *const u8,
+            W_BADIMG_LEN,
+            addr_of!(R_EBADIMG) as *const u8,
+            R_EBADIMG_LEN,
+        );
+    } else if code == 2 {
+        ld_reject(
+            name,
+            nl,
+            addr_of!(W_BADSUM) as *const u8,
+            W_BADSUM_LEN,
+            addr_of!(R_EBADSUM) as *const u8,
+            R_EBADSUM_LEN,
+        );
+    } else if code == 3 {
+        ld_reject(
+            name,
+            nl,
+            addr_of!(W_DENCAP) as *const u8,
+            W_DENCAP_LEN,
+            addr_of!(R_EDENCAP) as *const u8,
+            R_EDENCAP_LEN,
+        );
+    } else if code == 4 {
+        ld_reject(
+            name,
+            nl,
+            addr_of!(W_MALF) as *const u8,
+            W_MALF_LEN,
+            addr_of!(S_E_MAL) as *const u8,
+            S_E_MAL_LEN,
+        );
     } else {
-        app_reply(addr_of!(S_E_MAL) as *const u8, S_E_MAL_LEN);
+        app_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
     }
 }
+
+/// Record a successful load (loaded-state persistence lands with the
+/// AXIOM-LOAD-007 state machine; until then loads are stateless).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_mark_loaded(_name: *const u8, _nl: usize) {}
 
 /// `APP_RUN <name>` (state machine lands with AXIOM-LOAD-007).
 #[link_section = ".user.text"]
