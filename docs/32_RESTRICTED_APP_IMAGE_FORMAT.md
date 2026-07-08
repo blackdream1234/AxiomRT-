@@ -113,6 +113,26 @@ record: it does not parse app names, paths, manifests, or image
 fields, and it has no filesystem or selection policy. Image policy
 lives entirely in `app_loader_service`.
 
+### 7.1 Mapping mechanism review (AXIOM-LOAD-009)
+
+v1.6 adds **no** new kernel image-mapping syscall. A restricted image
+is represented by the existing static service/app mapping mechanism,
+`paging_hw::build_service_address_space`, which already maps validated
+text as U+R+X, rodata as U+R, and the stack as U+R+W, and the page
+table's permission check (`validate_perms`, MEM-P5) already rejects any
+W+X user mapping, any user device mapping, and any kernel-frame user
+mapping. The loader's own validator (§6) rejects oversized images, bad
+entry offsets, and out-of-policy stack requests in user space before
+any run.
+
+The admission rules such a mapping must satisfy are modeled and host-
+tested in `kernel::loader` (`admit_image_mapping`): W^X rejection
+(exercised through the real `PageTable::map` path), kernel-address
+rejection, oversized-image rejection, and bad-entry rejection. This
+documents the boundary a future map-validated-image mechanism (or the
+ELF path, §10) would enforce, without adding kernel attack surface in
+v1.6.
+
 ## 8. Filesystem/storage relationship
 
 Records are filesystem objects under `/bin` (docs/33 §3):

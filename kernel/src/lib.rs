@@ -36,5 +36,9 @@ pub mod fault;
 // docs/31_USER_SPACE_DRIVER_FRAMEWORK.md).
 pub mod device;
 
+// Restricted app image mapping admission (Phase v1.6,
+// docs/32_RESTRICTED_APP_IMAGE_FORMAT.md §7).
+pub mod loader;
+
 // Runtime monitoring events (Phase 11, docs/11_RUNTIME_MONITORING.md).
 pub mod monitor;
