@@ -1,0 +1,36 @@
+building os_boot kernel
+    Finished `release` profile [optimized] target(s) in 0.04s
+booting QEMU (scripted loader session)
+ok: found "axiom> "
+ok: found "hello.app counter.app fault_demo.app invalid_bad_magic.app invalid_bad_cap.app invalid_bad_checksum.app"
+ok: found "APP_IMAGE loaded=hello source=/bin/hello.app"
+ok: found "OK loaded hello"
+ok: found "OK running hello"
+ok: found "hello from app: hello"
+ok: found "TASK_EXITED task=hello"
+ok: found "OK loaded counter"
+ok: found "OK running counter"
+ok: found "APP counter progress=1"
+ok: found "APP counter progress=3"
+ok: found "APP counter done"
+ok: found "APP_IMAGE rejected=invalid_bad_magic reason=bad_image"
+ok: found "ERR bad_image"
+ok: found "APP_IMAGE rejected=invalid_bad_checksum reason=bad_checksum"
+ok: found "ERR bad_checksum"
+ok: found "APP_IMAGE rejected=invalid_bad_cap reason=denied_capability"
+ok: found "ERR denied_capability"
+ok: found "OK loaded fault_demo"
+ok: found "CAP_DENIED task=fault_demo"
+ok: found "FAULT type=WatchdogTimeout task=fault_demo"
+ok: found "CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive"
+ok: found "RECOVERY_APPLIED policy=Kill"
+ok: found "hello from app: hello"
+ok: found "OK etc apps docs bin"
+ok: found "OK block_size=48 blocks=8 readonly=true"
+ok: found "driver name=block_driver_service state=running kind=block_skeleton"
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
+ok: no kernel panic
+ok: app_loader stayed alive
+restoring default build
+PASS: restricted loader test

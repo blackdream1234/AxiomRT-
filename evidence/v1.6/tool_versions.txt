@@ -1,0 +1,5 @@
+rustc 1.96.1 (31fca3adb 2026-06-26)
+cargo 1.96.1 (356927216 2026-06-26)
+QEMU emulator version 11.0.1 (Debian 1:11.0.1+ds-1)
+The Coq Proof Assistant, version 8.20.1
+Linux 7.0.12+kali-amd64 x86_64

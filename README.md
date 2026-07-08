@@ -27,20 +27,20 @@ docs/01_SCOPE_AND_NON_GOALS.md.
 
 ## 3. Current phase
 
-* **Current milestone:** `v1.5-user-space-driver-framework` — first
-  user-space driver framework: kernel device objects and device
-  capabilities, capability-gated syscall-mediated MMIO (real virtio
-  window, real magic-register read), modeled DMA bounce-buffer grant,
-  synthetic IRQ event delivery to a driver endpoint, U-mode
-  `driver_manager` + `block_driver_service` skeleton, shell `drivers`
-  / `driver info|restart|fault block`, contained driver crash +
-  restart (docs/31). Earlier: `v1.4-storage-service`,
+* **Current milestone:** `v1.6-storage-backed-loader` — restricted
+  app image loading: the `AXAPP1` bounded image record format, a `/bin`
+  read-only tree whose valid records are storage-backed (fetched from
+  storage blocks via the fs→storage chain), a user-space loader
+  validator (magic, checksum, layout, W^X-by-separation, per-app
+  capability policy), a loaded-app state machine, and shell `bin` /
+  `app load|unload|state <name>` / `run loaded <name>` — safe loading,
+  running, rejection of malformed/over-privileged images, and fault
+  containment, all proven in QEMU (docs/32, docs/33). Earlier:
+  `v1.5-user-space-driver-framework`, `v1.4-storage-service`,
   `v1.3-readonly-fs`, `v1.2-app-loader`, `v1.1-os-shell`,
   `v1.0.1-clean`, `v1.0-industrial-eval`.
-* **Next milestone:** `v1.6-storage-backed-loader` (restricted app
-  image records, storage-backed fs path, loader validation) — **in
-  progress**; on-target version metadata reports `v1.6-dev` until the
-  v1.6 gate passes.
+* **Next milestone:** `v1.7-minimal-network-service` (still no
+  writable storage, no arbitrary ELF, no real hardware).
 * **Next product direction:** real OS completion
   (`AxiomrtFull Completion Mode.md` — user-facing shell, application
   loading, filesystem/storage services, host tooling).
