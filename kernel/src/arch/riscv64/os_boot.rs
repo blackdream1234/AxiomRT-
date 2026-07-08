@@ -934,43 +934,16 @@ fn ld_reject(name: *const u8, nl: usize, word: *const u8, wl: usize, reply: *con
     app_reply(reply, rl);
 }
 
-/// `APP_LOAD <name>` (docs/32 §6): fetch through fs, validate in fixed
-/// order, answer exactly one bounded reply. Only full success reports
-/// loaded.
+// Reject dispatch: a uniform branch chain (<=5 arms, same callee with
+// constant args), in its own function. A mixed-arm integer switch in
+// ld_load — dense success + reject cases together — made LLVM emit a
+// kernel-.rodata dispatch table that U-mode cannot reach (app_loader
+// page-faulted on 0xf000; docs/25 §2). Keeping the uniform arms
+// isolated here matches the block_reply fix.
 #[link_section = ".user.text"]
 #[inline(never)]
-fn ld_load(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8, st: *mut u8) {
-    let id = ld_app_id(name, nl);
-    // Available -> Loaded only (docs/32; repeated loads are
-    // deterministic: unload first).
-    // SAFETY: id < 3 when not MAX; st is the 4-byte state array.
-    if id != u64::MAX && unsafe { read_volatile(st.add(id as usize)) } != 0 {
-        app_reply(addr_of!(R_ELOADED) as *const u8, R_ELOADED_LEN);
-        return;
-    }
-    let rr = ld_fetch(name, nl, qp, rp);
-    if rr < 0 {
-        app_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
-        return;
-    }
-    let code = ld_validate(rp, rr as usize, name, nl);
-    if code == 0 {
-        uput!(L_OK, L_OK_LEN);
-        uwrite_ptr(name, nl);
-        uput!(L_SRC, L_SRC_LEN);
-        uwrite_ptr(name, nl);
-        uput!(LD_APP_SUF, LD_APP_SUF_LEN);
-        uput!(M_NL, M_NL_LEN);
-        // SAFETY: code 0 implies a known app (rule 7), so id < 3.
-        unsafe { write_volatile(st.add(id as usize), 1) };
-        ld_reply_name(
-            addr_of!(RP_LOADED) as *const u8,
-            RP_LOADED_LEN,
-            name,
-            nl,
-            qp,
-        );
-    } else if code == 1 {
+fn ld_emit_reject(code: u8, name: *const u8, nl: usize) {
+    if code == 1 {
         ld_reject(
             name,
             nl,
@@ -997,7 +970,8 @@ fn ld_load(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8, st: *mut u8) {
             addr_of!(R_EDENCAP) as *const u8,
             R_EDENCAP_LEN,
         );
-    } else if code == 4 {
+    } else {
+        // code 4 (malformed) and any unexpected non-zero code.
         ld_reject(
             name,
             nl,
@@ -1006,9 +980,52 @@ fn ld_load(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8, st: *mut u8) {
             addr_of!(S_E_MAL) as *const u8,
             S_E_MAL_LEN,
         );
-    } else {
-        app_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
     }
+}
+
+/// `APP_LOAD <name>` (docs/32 §6): fetch through fs, validate in fixed
+/// order, answer exactly one bounded reply. Only full success reports
+/// loaded.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ld_load(name: *const u8, nl: usize, qp: *mut u8, rp: *mut u8, st: *mut u8) {
+    let id = ld_app_id(name, nl);
+    // Available -> Loaded only (docs/32; repeated loads are
+    // deterministic: unload first).
+    // SAFETY: id < 3 when not MAX; st is the 4-byte state array.
+    if id != u64::MAX && unsafe { read_volatile(st.add(id as usize)) } != 0 {
+        app_reply(addr_of!(R_ELOADED) as *const u8, R_ELOADED_LEN);
+        return;
+    }
+    let rr = ld_fetch(name, nl, qp, rp);
+    if rr < 0 {
+        app_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+        return;
+    }
+    let code = ld_validate(rp, rr as usize, name, nl);
+    if code == 5 {
+        app_reply(addr_of!(E_NOTFOUND) as *const u8, E_NOTFOUND_LEN);
+        return;
+    }
+    if code != 0 {
+        ld_emit_reject(code, name, nl);
+        return;
+    }
+    uput!(L_OK, L_OK_LEN);
+    uwrite_ptr(name, nl);
+    uput!(L_SRC, L_SRC_LEN);
+    uwrite_ptr(name, nl);
+    uput!(LD_APP_SUF, LD_APP_SUF_LEN);
+    uput!(M_NL, M_NL_LEN);
+    // SAFETY: code 0 implies a known app (rule 7), so id < 3.
+    unsafe { write_volatile(st.add(id as usize), 1) };
+    ld_reply_name(
+        addr_of!(RP_LOADED) as *const u8,
+        RP_LOADED_LEN,
+        name,
+        nl,
+        qp,
+    );
 }
 
 /// Loaded-app id: 0 = hello, 1 = counter, 2 = fault_demo;
@@ -2002,7 +2019,7 @@ umsg!(M_PROMPT, M_PROMPT_LEN, b"axiom> ");
 umsg!(
     M_HELP,
     M_HELP_LEN,
-    b"commands: help version tasks faults ipc caps memory uptime events\n          run demo | kill <idx> | restart <idx> | clear | shutdown\n          drivers | driver <info|restart|fault> block\n"
+    b"commands: help version tasks faults ipc caps memory uptime events\n          run demo | kill <idx> | restart <idx> | clear | shutdown\n          drivers | driver <info|restart|fault> block\n          bin | app <load|unload|state> <name> | run loaded <name>\n"
 );
 umsg!(
     M_VERSION,
@@ -2030,6 +2047,11 @@ umsg!(C_MEMORY, C_MEMORY_LEN, b"memory");
 umsg!(C_UPTIME, C_UPTIME_LEN, b"uptime");
 umsg!(C_EVENTS, C_EVENTS_LEN, b"events");
 umsg!(C_RUN_DEMO, C_RUN_DEMO_LEN, b"run demo");
+umsg!(C_BIN, C_BIN_LEN, b"bin");
+umsg!(C_APPLOAD, C_APPLOAD_LEN, b"app load ");
+umsg!(C_APPUNLOAD, C_APPUNLOAD_LEN, b"app unload ");
+umsg!(C_APPSTATE, C_APPSTATE_LEN, b"app state ");
+umsg!(C_RUNLOADED, C_RUNLOADED_LEN, b"run loaded ");
 umsg!(C_DRIVERS, C_DRIVERS_LEN, b"drivers");
 umsg!(C_DRIVERSP, C_DRIVERSP_LEN, b"driver ");
 umsg!(C_STORI, C_STORI_LEN, b"storage info");
@@ -2058,6 +2080,47 @@ macro_rules! is_cmd {
 #[inline(never)]
 fn shell_app_forward(bp: *mut u8, n: usize, rp: *mut u8) {
     if sys3(SYS_SEND, 4, bp as u64, n as u64) < 0 {
+        uput!(M_ERR, M_ERR_LEN);
+        return;
+    }
+    let r = sys3(SYS_RECV, 4, rp as u64, 64);
+    if r > 0 {
+        uwrite_ptr(rp, r as usize);
+        uput!(M_NL, M_NL_LEN);
+    } else {
+        uput!(M_ERR, M_ERR_LEN);
+    }
+}
+
+/// Translate one shell loader command into its protocol message
+/// (docs/32 §6): `<PROTO><name>` built in a stack buffer, forwarded to
+/// app_loader on the shell's app capability (slot 4), bounded reply
+/// printed verbatim. The shell holds no image or validation knowledge.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn shell_app_proto(
+    bp: *const u8,
+    n: usize,
+    tail_at: usize,
+    proto: *const u8,
+    plen: usize,
+    qp: *mut u8,
+    rp: *mut u8,
+) {
+    let mut q = 0usize;
+    while q < plen {
+        // SAFETY: bounded copy into the 64-byte request buffer.
+        unsafe { write_volatile(qp.add(q), read_volatile(proto.add(q))) };
+        q += 1;
+    }
+    let mut i = tail_at;
+    while i < n && q < 63 {
+        // SAFETY: bounded copy inside both 64-byte buffers.
+        unsafe { write_volatile(qp.add(q), read_volatile(bp.add(i))) };
+        i += 1;
+        q += 1;
+    }
+    if sys3(SYS_SEND, 4, qp as u64, q as u64) < 0 {
         uput!(M_ERR, M_ERR_LEN);
         return;
     }
@@ -2230,6 +2293,50 @@ extern "C" fn shell_body() -> ! {
             if sys3(SYS_TASK_START, SVC_FAULTY, 0, 0) < 0 {
                 uput!(M_ERR, M_ERR_LEN);
             }
+        } else if is_cmd!(bp, n, C_BIN, C_BIN_LEN) {
+            // `bin` = ls /bin (presentation alias; fs owns the listing).
+            shell_fs_cmd(addr_of!(F_BIN) as *const u8, F_BIN_LEN, 0, false, qp, op);
+        } else if starts_with(bp, n, addr_of!(C_APPLOAD) as *const u8, C_APPLOAD_LEN) {
+            shell_app_proto(
+                bp,
+                n,
+                C_APPLOAD_LEN,
+                addr_of!(PL_LOAD) as *const u8,
+                PL_LOAD_LEN,
+                qp,
+                op,
+            );
+        } else if starts_with(bp, n, addr_of!(C_APPUNLOAD) as *const u8, C_APPUNLOAD_LEN) {
+            shell_app_proto(
+                bp,
+                n,
+                C_APPUNLOAD_LEN,
+                addr_of!(PL_UNLOAD) as *const u8,
+                PL_UNLOAD_LEN,
+                qp,
+                op,
+            );
+        } else if starts_with(bp, n, addr_of!(C_APPSTATE) as *const u8, C_APPSTATE_LEN) {
+            shell_app_proto(
+                bp,
+                n,
+                C_APPSTATE_LEN,
+                addr_of!(PL_STATE) as *const u8,
+                PL_STATE_LEN,
+                qp,
+                op,
+            );
+        } else if starts_with(bp, n, addr_of!(C_RUNLOADED) as *const u8, C_RUNLOADED_LEN) {
+            // must precede the generic `run <name>` prefix below
+            shell_app_proto(
+                bp,
+                n,
+                C_RUNLOADED_LEN,
+                addr_of!(PL_RUN) as *const u8,
+                PL_RUN_LEN,
+                qp,
+                op,
+            );
         } else if is_cmd!(bp, n, C_DRIVERS, C_DRIVERS_LEN)
             || starts_with(bp, n, addr_of!(C_DRIVERSP) as *const u8, C_DRIVERSP_LEN)
         {
