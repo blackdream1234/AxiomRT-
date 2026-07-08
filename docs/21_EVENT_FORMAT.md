@@ -46,6 +46,7 @@ KIND [flag ...] [key=value ...]
 | `SUPERVISOR` `LOGGER` | service | `SUPERVISOR decision=Kill by=supervisor_task` |
 | `MMU`, `AxiomRT kernel booted`, bare `key=value` boot lines | boot | `MMU status=enabled mode=sv39 scope=kernel` |
 | `DEVICE` `DEVICE_DENIED` `MMIO` `MMIO_DENIED` `DMA` `DMA_DENIED` `IRQ` `IRQ_DENIED` `IRQ_DROPPED` `DRIVER` `DRIVER_MANAGER` | driver | `MMIO grant task=block_driver_service device=block0 region=virtio_mmio0` (v1.5, docs/31) |
+| `APP_IMAGE` | loader | `APP_IMAGE loaded=hello source=/bin/hello.app` / `APP_IMAGE rejected=invalid_bad_magic reason=bad_image` (v1.6, docs/32) |
 
 Lines whose first token is not in this vocabulary (OpenSBI banner,
 cargo output, blank lines) are **skipped and counted**, never guessed

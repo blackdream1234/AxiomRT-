@@ -22,6 +22,8 @@ pub enum Category {
     /// Driver framework events (docs/31): device registration, MMIO/
     /// DMA grants and denials, IRQ delivery/drops, driver lifecycle.
     Driver,
+    /// Restricted app loader events (docs/32): image load / rejection.
+    Loader,
 }
 
 impl Category {
@@ -39,6 +41,7 @@ impl Category {
             Category::Service => "service",
             Category::Boot => "boot",
             Category::Driver => "driver",
+            Category::Loader => "loader",
         }
     }
 }
@@ -88,6 +91,8 @@ fn categorize(kind: &str, fields: &[(String, String)]) -> Option<Category> {
         // Driver framework vocabulary (docs/31 §7-§9).
         "DEVICE" | "DEVICE_DENIED" | "MMIO" | "MMIO_DENIED" | "DMA" | "DMA_DENIED" | "IRQ"
         | "IRQ_DENIED" | "IRQ_DROPPED" | "DRIVER" | "DRIVER_MANAGER" => Category::Driver,
+        // Restricted loader vocabulary (docs/32 §6).
+        "APP_IMAGE" => Category::Loader,
         _ => return None,
     })
 }
@@ -227,7 +232,7 @@ pub fn to_json(ev: &Event) -> String {
 
 /// Human-readable per-category / per-kind counts (docs/21 §3).
 pub fn summary(log: &ParsedLog) -> String {
-    const ORDER: [Category; 12] = [
+    const ORDER: [Category; 13] = [
         Category::Task,
         Category::Scheduler,
         Category::Syscall,
@@ -240,6 +245,7 @@ pub fn summary(log: &ParsedLog) -> String {
         Category::Service,
         Category::Boot,
         Category::Driver,
+        Category::Loader,
     ];
 
     let mut out = format!(
@@ -394,6 +400,21 @@ mod tests {
         assert_eq!(ev.flags, vec!["grant"]);
         assert_eq!(field(&ev, "device"), Some("block0"));
         assert_eq!(field(&ev, "region"), Some("virtio_mmio0"));
+    }
+
+    // Restricted loader lines, verbatim from a v1.6 QEMU run (docs/32).
+    #[test]
+    fn loader_events_are_loader_category() {
+        let loaded =
+            parse_line("APP_IMAGE loaded=hello source=/bin/hello.app").expect("loaded parses");
+        assert_eq!(loaded.category, Category::Loader);
+        assert_eq!(field(&loaded, "loaded"), Some("hello"));
+        assert_eq!(field(&loaded, "source"), Some("/bin/hello.app"));
+        let rejected = parse_line("APP_IMAGE rejected=invalid_bad_magic reason=bad_image")
+            .expect("rejected parses");
+        assert_eq!(rejected.category, Category::Loader);
+        assert_eq!(field(&rejected, "rejected"), Some("invalid_bad_magic"));
+        assert_eq!(field(&rejected, "reason"), Some("bad_image"));
     }
 
     #[test]

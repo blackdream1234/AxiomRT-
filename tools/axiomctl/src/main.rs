@@ -29,6 +29,9 @@ COMMANDS:
     demo drivers     boot the interactive OS (os_boot) for the driver
                      framework: try drivers / driver info block /
                      driver fault block / driver restart block
+    demo loader      boot the interactive OS (os_boot) for the restricted
+                     app loader: try bin / app load hello /
+                     run loaded hello / app load invalid_bad_magic
     verify           run the full verification sweep (QEMU + host + Coq)
     evidence list    list archived evidence versions
     evidence open <ver> [file]
@@ -58,7 +61,8 @@ fn main() -> ExitCode {
         ["run", rest @ ..] => cmd_run(rest),
         ["demo", "memory"] => cmd_demo(false),
         ["demo", "full"] => cmd_demo(true),
-        ["demo", "drivers"] => cmd_demo_drivers(),
+        ["demo", "drivers"] => cmd_demo_os("driver framework", "bin | app load hello | run loaded hello | app load invalid_bad_magic | drivers"),
+        ["demo", "loader"] => cmd_demo_os("restricted app loader", "bin | app load hello | app state hello | run loaded hello | app unload hello | app load invalid_bad_magic"),
         ["verify"] => cmd_verify(),
         ["evidence", "list"] => cmd_evidence_list(),
         ["evidence", "open", rest @ ..] => cmd_evidence_open(rest),
@@ -294,15 +298,16 @@ fn cmd_demo(full: bool) -> ExitCode {
     }
 }
 
-/// Boot the interactive OS build for the driver framework (docs/31):
-/// the operator lands on `axiom>` and can drive drivers / driver info
-/// block / driver fault block / driver restart block by hand.
-fn cmd_demo_drivers() -> ExitCode {
+/// Boot the interactive OS (os_boot) build so an operator can drive a
+/// v1.5+ subsystem by hand (docs/31, docs/32). `label` names the
+/// subsystem; `hint` is the one-line command suggestion printed before
+/// QEMU takes the terminal.
+fn cmd_demo_os(label: &str, hint: &str) -> ExitCode {
     let root = match require_repo_root() {
         Ok(r) => r,
         Err(code) => return code,
     };
-    println!("axiomctl: building os_boot kernel (driver framework)");
+    println!("axiomctl: building os_boot kernel ({label})");
     let build = run_inherit(
         &root,
         "cargo",
@@ -319,9 +324,7 @@ fn cmd_demo_drivers() -> ExitCode {
         return build;
     }
     println!("axiomctl: booting interactive OS (exit: Ctrl-A then x)");
-    println!(
-        "axiomctl: try: drivers | driver info block | driver fault block | driver restart block"
-    );
+    println!("axiomctl: try: {hint}");
     println!("axiomctl: note — run `axiomctl build` afterwards to restore the default kernel");
     // Keep in sync with scripts/run_qemu.sh.
     run_inherit(

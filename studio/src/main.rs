@@ -198,6 +198,7 @@ fn page_route(path: &str) -> bool {
             | "/ipc"
             | "/capabilities"
             | "/drivers"
+            | "/loader"
             | "/tests"
             | "/proofs"
             | "/evidence"

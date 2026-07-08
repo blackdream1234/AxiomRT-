@@ -94,6 +94,7 @@
   <a href="/ipc" data-p="ipc">IPC</a>
   <a href="/capabilities" data-p="capabilities">Capabilities</a>
   <a href="/drivers" data-p="drivers">Drivers</a>
+  <a href="/loader" data-p="loader">Loader</a>
   <a href="/tests" data-p="tests">Tests</a>
   <a href="/proofs" data-p="proofs">Proofs</a>
   <a href="/evidence" data-p="evidence">Evidence</a>
@@ -167,6 +168,12 @@
   <h2>Driver framework</h2>
   <p class="sub">Device registration, MMIO/DMA grants and denials, IRQ delivery, and driver lifecycle events (docs/31) from the last run.</p>
   <div class="card"><table id="drivers"><thead><tr><th>#</th><th>detail</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section data-p="loader">
+  <h2>Restricted app loader</h2>
+  <p class="sub">Storage-backed app image loads and rejections (docs/32): APP_IMAGE loaded / rejected events from the last run.</p>
+  <div class="card"><table id="loader"><thead><tr><th>#</th><th>detail</th></tr></thead><tbody></tbody></table></div>
 </section>
 
 <section data-p="tests">
@@ -291,6 +298,7 @@ async function loadEvents() {
   rows("#ipc", evRows(["ipc"], 2));
   rows("#caps", evRows(["capability"], 2));
   rows("#drivers", evRows(["driver"], 2));
+  rows("#loader", evRows(["loader"], 2));
 }
 function detail(e) {
   const flags = e.flags.join(" ");
