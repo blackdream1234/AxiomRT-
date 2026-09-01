@@ -80,6 +80,10 @@ const SVC_FAULTY: u64 = 4;
 const APP_HELLO: u64 = 6;
 const APP_FAULT: u64 = 7;
 const APP_COUNTER: u64 = 8;
+/// Service-table indexes of the v1.7 network tasks (docs/34 section 2).
+const TBL_NET_DRIVER: u64 = 13;
+const TBL_NET_SERVICE: u64 = 14;
+
 /// Service-table index of block_driver_service (docs/31 §5).
 const TBL_BLOCK_DRIVER: u64 = 12;
 /// TCB slot of block_driver_service (sys_task_restart takes slots).
@@ -339,6 +343,10 @@ pub fn os_boot() -> ! {
     table[11].caps[2] = Some(cap_control());
     table[11].caps[3] = Some(cap_console(CAP_RIGHT_SEND));
     table[11].caps[4] = Some(cap_device(0, DEV_RIGHT_DRIVER_CONTROL));
+    // Network-driver lifecycle authority: command endpoint plus the
+    // synthetic net0 control grant used only for attention/liveness.
+    table[11].caps[5] = Some(cap_endpoint(EP_NET_DRV, CAP_RIGHT_SEND | CAP_RIGHT_RECV));
+    table[11].caps[6] = Some(cap_device(1, DEV_RIGHT_DRIVER_CONTROL));
     // block_driver_service (docs/31 §5): command channel, device
     // capability (info + mmio_read + dma r/w + irq_receive — NOT
     // mmio_write, NOT driver_control: its one register-write attempt
@@ -571,8 +579,12 @@ extern "C" fn init_body() -> ! {
     // Storage service (table index 10, docs/29).
     sys3(SYS_TASK_START, 10, 0, 0);
     // Driver manager (table index 11, docs/31 §4); starting drivers is
-    // its policy, not init's.
+    // its policy for block_driver_service.
     sys3(SYS_TASK_START, 11, 0, 0);
+    // v1.7 network tasks are explicit init policy: driver first, then
+    // the shell-facing service. block_driver remains manager-started.
+    sys3(SYS_TASK_START, TBL_NET_DRIVER, 0, 0);
+    sys3(SYS_TASK_START, TBL_NET_SERVICE, 0, 0);
     sys3(SYS_EXIT, 0, 0, 0);
     loop {
         sys3(SYS_YIELD, 0, 0, 0);
@@ -2272,6 +2284,26 @@ umsg!(
     DMR_INFO_STOP_LEN,
     b"kind=block_skeleton state=stopped"
 );
+umsg!(
+    DM_NET_LINE_RUN,
+    DM_NET_LINE_RUN_LEN,
+    b"driver name=net_driver_service state=running kind=network_synthetic\n"
+);
+umsg!(
+    DM_NET_LINE_FLT,
+    DM_NET_LINE_FLT_LEN,
+    b"driver name=net_driver_service state=faulted kind=network_synthetic\n"
+);
+umsg!(
+    DM_NET_LINE_STOP,
+    DM_NET_LINE_STOP_LEN,
+    b"driver name=net_driver_service state=stopped kind=network_synthetic\n"
+);
+umsg!(
+    DM_NET_STARTED,
+    DM_NET_STARTED_LEN,
+    b"DRIVER started=net_driver_service\n"
+);
 umsg!(DMR_RESTARTED, DMR_RESTARTED_LEN, b"restarted");
 umsg!(
     DMR_RESTART_ERR,
@@ -2301,15 +2333,28 @@ fn dm_reply(p: *const u8, len: usize) {
 /// one (IPC). Branch chain with a call per arm (docs/25 §2 rules).
 #[link_section = ".user.text"]
 #[inline(never)]
-fn dm_list(st: u8) {
+fn dm_list(st: u8, net_st: u8) {
     if st == 1 {
         uput!(DM_LINE_RUN, DM_LINE_RUN_LEN);
-        dm_reply(addr_of!(DMR_RUN) as *const u8, DMR_RUN_LEN);
     } else if st == 2 {
         uput!(DM_LINE_FLT, DM_LINE_FLT_LEN);
-        dm_reply(addr_of!(DMR_FLT) as *const u8, DMR_FLT_LEN);
     } else {
         uput!(DM_LINE_STOP, DM_LINE_STOP_LEN);
+    }
+    if net_st == 1 {
+        uput!(DM_NET_LINE_RUN, DM_NET_LINE_RUN_LEN);
+    } else if net_st == 2 {
+        uput!(DM_NET_LINE_FLT, DM_NET_LINE_FLT_LEN);
+    } else {
+        uput!(DM_NET_LINE_STOP, DM_NET_LINE_STOP_LEN);
+    }
+    // Preserve the existing bounded IPC reply used by old shell tests;
+    // the two full state records above are emitted as structured events.
+    if st == 1 {
+        dm_reply(addr_of!(DMR_RUN) as *const u8, DMR_RUN_LEN);
+    } else if st == 2 {
+        dm_reply(addr_of!(DMR_FLT) as *const u8, DMR_FLT_LEN);
+    } else {
         dm_reply(addr_of!(DMR_STOP) as *const u8, DMR_STOP_LEN);
     }
 }
@@ -2367,6 +2412,16 @@ extern "C" fn driver_manager_body() -> ! {
     } else {
         uput!(DM_STARTFAIL, DM_STARTFAIL_LEN);
     }
+    // init_service has already started net_driver_service. Its manager
+    // state becomes running only if the explicit net0 liveness/attention
+    // delivery succeeds; this also releases the driver's startup wait.
+    let net_st: u8 = if sys3(SYS_IRQ_RAISE, 6, 0, 0) >= 0 {
+        uput!(DM_NET_STARTED, DM_NET_STARTED_LEN);
+        1
+    } else {
+        0
+    };
+
     loop {
         let r = sys3(SYS_RECV, 0, bp as u64, 64);
         if r <= 0 {
@@ -2374,7 +2429,7 @@ extern "C" fn driver_manager_body() -> ! {
         }
         let n = r as usize;
         if eqs(bp, n, addr_of!(DMC_LIST) as *const u8, DMC_LIST_LEN) {
-            dm_list(st);
+            dm_list(st, net_st);
         } else if eqs(bp, n, addr_of!(DMC_INFO) as *const u8, DMC_INFO_LEN) {
             dm_info(st, sp);
         } else if eqs(bp, n, addr_of!(DMC_RESTART) as *const u8, DMC_RESTART_LEN) {
