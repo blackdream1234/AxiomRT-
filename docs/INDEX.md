@@ -30,6 +30,7 @@
 | [INDUSTRIAL_EVALUATION_KIT.md](INDUSTRIAL_EVALUATION_KIT.md) | Phase 13 | Evaluation kit definition |
 | [DEMO_SCENARIO.md](DEMO_SCENARIO.md) | Phase 13 | Fault containment demo scenario |
 | [34_NETWORK_SERVICE.md](34_NETWORK_SERVICE.md) | v1.7 | Minimal user-space network architecture and bounded protocol |
+| [35_VIRTIO_NET_INVESTIGATION.md](35_VIRTIO_NET_INVESTIGATION.md) | v1.7 | QEMU/virtio-net transport investigation and synthetic-path decision |
 
 File names above follow the task pack verbatim (numbering overlaps are
 intentional and preserved).
