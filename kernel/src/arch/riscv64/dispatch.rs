@@ -161,6 +161,8 @@ pub const DEV_RIGHT_DMA_WRITE: u16 = 1 << 4;
 pub const DEV_RIGHT_IRQ_RECEIVE: u16 = 1 << 5;
 #[allow(dead_code)] // os_boot-only API
 pub const DEV_RIGHT_DRIVER_CONTROL: u16 = 1 << 6;
+#[allow(dead_code)] // os_boot-only API
+pub const DEV_RIGHT_NETWORK_DRIVER: u16 = 1 << 7;
 
 /// Boot-time device capability constructor (docs/31 §10).
 #[allow(dead_code)] // os_boot-only API
@@ -247,7 +249,7 @@ const EMPTY_TCB: Tcb = Tcb {
 
 /// Maximum on-target tasks (14 since the driver phase: 12 + the
 /// driver_manager and block_driver_service slots, docs/31 §4/§5).
-pub const MAX_TASKS: usize = 14;
+pub const MAX_TASKS: usize = 15;
 
 static mut TASKS: [Tcb; MAX_TASKS] = [EMPTY_TCB; MAX_TASKS];
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
@@ -282,7 +284,7 @@ enum Ep {
 /// 4 = filesystem channel (docs/28), 5 = storage channel (docs/29),
 /// 6 = driver-manager channel, 7 = driver command channel, 8 = driver
 /// IRQ events (docs/31).
-const NUM_ENDPOINTS: usize = 9;
+const NUM_ENDPOINTS: usize = 11;
 static mut ENDPOINTS: [Ep; NUM_ENDPOINTS] = [Ep::Idle; NUM_ENDPOINTS];
 /// Kernel staging buffer for user send→recv copies (bounded, no shared
 /// memory, docs/17 §2).
@@ -1000,17 +1002,30 @@ struct DeviceDef {
 /// The kernel device table (docs/31 §6). v1.5: one device, `block0`,
 /// on the first virtio-mmio transport window of QEMU virt (docs/30 §1).
 /// The window is real; the device behind it is not driven in v1.5.
-static DEVICES: [DeviceDef; 1] = [DeviceDef {
-    name: "block0",
-    kind: "block_skeleton",
-    mmio_name: "virtio_mmio0",
-    mmio_base: 0x1000_1000,
-    mmio_size: 0x200,
-    irq_endpoint: 8,
-    irq_name: "driver_irq",
-    dma_name: "block0_dma",
-    dma_size: 4096,
-}];
+static DEVICES: [DeviceDef; 2] = [
+    DeviceDef {
+        name: "block0",
+        kind: "block_skeleton",
+        mmio_name: "virtio_mmio0",
+        mmio_base: 0x1000_1000,
+        mmio_size: 0x200,
+        irq_endpoint: 8,
+        irq_name: "driver_irq",
+        dma_name: "block0_dma",
+        dma_size: 4096,
+    },
+    DeviceDef {
+        name: "net0",
+        kind: "network_synthetic",
+        mmio_name: "none",
+        mmio_base: 0,
+        mmio_size: 0,
+        irq_endpoint: 10,
+        irq_name: "net_irq",
+        dma_name: "none",
+        dma_size: 0,
+    },
+];
 
 /// Resolve `cap_index` in task `cur`'s table for a **device** capability
 /// with the `required` rights, in the fixed order of docs/06 §4:
@@ -1144,10 +1159,16 @@ struct IrqRoute {
 }
 
 /// One route per device table entry.
-static mut IRQ_ROUTES: [IrqRoute; 1] = [IrqRoute {
-    receiver: MAX_TASKS,
-    pending: false,
-}];
+static mut IRQ_ROUTES: [IrqRoute; 2] = [
+    IrqRoute {
+        receiver: MAX_TASKS,
+        pending: false,
+    },
+    IrqRoute {
+        receiver: MAX_TASKS,
+        pending: false,
+    },
+];
 
 fn irq_route(dev: usize) -> IrqRoute {
     // SAFETY: single-hart, non-reentrant dispatcher state.

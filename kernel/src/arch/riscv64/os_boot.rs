@@ -23,6 +23,7 @@ use crate::dispatch::{
     CAP_RIGHT_CONTROL, CAP_RIGHT_FS_LIST, CAP_RIGHT_FS_READ, CAP_RIGHT_RECV, CAP_RIGHT_SEND,
     CAP_RIGHT_STORAGE_INFO, CAP_RIGHT_STORAGE_READ, DEV_RIGHT_DMA_READ, DEV_RIGHT_DMA_WRITE,
     DEV_RIGHT_DRIVER_CONTROL, DEV_RIGHT_INFO, DEV_RIGHT_IRQ_RECEIVE, DEV_RIGHT_MMIO_READ,
+    DEV_RIGHT_NETWORK_DRIVER,
 };
 use crate::paging_hw;
 use crate::timer;
@@ -65,6 +66,10 @@ const EP_DRV: u32 = 6;
 const EP_BLK: u32 = 7;
 /// Driver IRQ event endpoint (docs/31 §9).
 const EP_IRQ: u32 = 8;
+/// net_service/driver_manager <-> net_driver_service commands.
+const EP_NET_DRV: u32 = 9;
+/// Synthetic net0 attention/liveness endpoint.
+const EP_NET_IRQ: u32 = 10;
 
 /// Service-table index of the faulty demo task (`run demo`).
 const SVC_FAULTY: u64 = 4;
@@ -83,7 +88,8 @@ const SLOT_BLOCK_DRIVER: u64 = 13;
 
 #[repr(C, align(4096))]
 struct Stack([u8; 4096]);
-static mut OS_STACKS: [Stack; 14] = [
+static mut OS_STACKS: [Stack; 15] = [
+    Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
@@ -109,7 +115,7 @@ const NO_CAPS: [Option<Cap>; dispatch::CAPS_PER_TASK] = [None; dispatch::CAPS_PE
 /// Service table (docs/25 §3). Entry addresses, stacks, and capability
 /// grants are runtime values, patched once by `os_boot` before
 /// dispatching; the rest is fixed here.
-static mut TABLE: [ServiceDef; 13] = [
+static mut TABLE: [ServiceDef; 14] = [
     ServiceDef {
         name: "supervisor_service",
         entry: 0,
@@ -214,6 +220,14 @@ static mut TABLE: [ServiceDef; 13] = [
         slot: 13,
         caps: NO_CAPS,
     },
+    ServiceDef {
+        name: "net_driver_service",
+        entry: 0,
+        stack_phys: 0,
+        prio: 2,
+        slot: 14,
+        caps: NO_CAPS,
+    },
 ];
 
 fn stack_phys(i: usize) -> u64 {
@@ -226,7 +240,7 @@ fn stack_phys(i: usize) -> u64 {
 /// timer, dispatch.
 pub fn os_boot() -> ! {
     // SAFETY: single hart, boot-time exclusive access, before start().
-    let table: &'static mut [ServiceDef; 13] = unsafe { &mut *addr_of_mut!(TABLE) };
+    let table: &'static mut [ServiceDef; 14] = unsafe { &mut *addr_of_mut!(TABLE) };
     table[0].entry = supervisor_body as *const () as u64;
     table[0].stack_phys = stack_phys(1);
     table[0].caps[0] = Some(cap_endpoint(EP_FAULT, CAP_RIGHT_RECV | CAP_RIGHT_CONTROL));
@@ -329,6 +343,18 @@ pub fn os_boot() -> ! {
             | DEV_RIGHT_IRQ_RECEIVE,
     ));
     table[12].caps[2] = Some(cap_endpoint(EP_IRQ, CAP_RIGHT_RECV));
+    // net_driver_service (docs/34 §2/§7): bounded driver IPC, explicit
+    // synthetic net0 identity/IRQ authority, and console event output.
+    // It receives no MMIO or DMA right because v1.7 drives no hardware.
+    table[13].entry = net_driver_body as *const () as u64;
+    table[13].stack_phys = stack_phys(14);
+    table[13].caps[0] = Some(cap_endpoint(EP_NET_DRV, CAP_RIGHT_RECV | CAP_RIGHT_SEND));
+    table[13].caps[1] = Some(cap_device(
+        1,
+        DEV_RIGHT_INFO | DEV_RIGHT_IRQ_RECEIVE | DEV_RIGHT_NETWORK_DRIVER,
+    ));
+    table[13].caps[2] = Some(cap_endpoint(EP_NET_IRQ, CAP_RIGHT_RECV));
+    table[13].caps[3] = Some(cap_console(CAP_RIGHT_SEND));
 
     // SAFETY: boot-time, single hart, called once.
     unsafe { dispatch::set_service_table(table) };
@@ -1794,6 +1820,194 @@ extern "C" fn block_driver_body() -> ! {
             unsafe { core::arch::asm!("1:", "j 1b", options(noreturn)) }
         } else {
             sys3(SYS_SEND, 0, addr_of!(BD_ERR) as u64, BD_ERR_LEN as u64);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// net_driver_service (U-mode): bounded synthetic packet driver
+// (AXIOM-NET-005; docs/34 §2/§5)
+// ---------------------------------------------------------------------
+
+umsg!(
+    ND_STARTED,
+    ND_STARTED_LEN,
+    b"NET_DRIVER started=net_driver_service\n"
+);
+umsg!(
+    ND_TX_EVENT,
+    ND_TX_EVENT_LEN,
+    b"NET_DRIVER tx_test bytes=64\n"
+);
+umsg!(ND_BAD, ND_BAD_LEN, b"ERR malformed");
+umsg!(ND_UNSUPPORTED, ND_UNSUPPORTED_LEN, b"ERR unsupported");
+umsg!(ND_TOO_LARGE, ND_TOO_LARGE_LEN, b"ERR too_large");
+umsg!(
+    ND_TX_REPLY,
+    ND_TX_REPLY_LEN,
+    b"OK sent test_packet bytes=64"
+);
+umsg!(ND_STATUS_P, ND_STATUS_P_LEN, b"OK driver=running tx=");
+umsg!(ND_RX_MID, ND_RX_MID_LEN, b" rx=");
+umsg!(ND_MODE, ND_MODE_LEN, b" mode=synthetic");
+umsg!(ND_RX_REPLY_P, ND_RX_REPLY_P_LEN, b"OK rx_count=");
+umsg!(ND_RX_EVENT_P, ND_RX_EVENT_P_LEN, b"NET_DRIVER rx_count=");
+umsg!(NDC_STATUS, NDC_STATUS_LEN, b"DRV_STATUS");
+umsg!(NDC_TX, NDC_TX_LEN, b"DRV_TX_TEST");
+umsg!(NDC_RX, NDC_RX_LEN, b"DRV_RX_COUNT");
+umsg!(NDC_FAULT, NDC_FAULT_LEN, b"DRV_FAULT");
+umsg!(NDC_RESTART, NDC_RESTART_LEN, b"DRV_RESTART");
+
+/// Copy one constant into a 64-byte network reply/event buffer.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn nd_copy(dst: *mut u8, mut at: usize, src: *const u8, len: usize) -> usize {
+    let mut i = 0usize;
+    while i < len && at < 64 {
+        // SAFETY: both source and destination are bounded by their callers.
+        unsafe { write_volatile(dst.add(at), read_volatile(src.add(i))) };
+        at += 1;
+        i += 1;
+    }
+    at
+}
+
+/// Append one decimal u64 without allocation or formatting machinery.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn nd_dec(dst: *mut u8, mut at: usize, mut value: u64) -> usize {
+    if value == 0 {
+        if at < 64 {
+            // SAFETY: at is inside the fixed reply buffer.
+            unsafe { write_volatile(dst.add(at), b'0') };
+            at += 1;
+        }
+        return at;
+    }
+    let mut tmp = MaybeUninit::<[u8; 20]>::uninit();
+    let tp = addr_of_mut!(tmp) as *mut u8;
+    let mut n = 0usize;
+    while value > 0 && n < 20 {
+        // SAFETY: n < 20.
+        unsafe { write_volatile(tp.add(n), b'0' + (value % 10) as u8) };
+        value /= 10;
+        n += 1;
+    }
+    while n > 0 && at < 64 {
+        n -= 1;
+        // SAFETY: n < 20 and at < 64.
+        unsafe { write_volatile(dst.add(at), read_volatile(tp.add(n))) };
+        at += 1;
+    }
+    at
+}
+
+/// Reply with driver state and both bounded counters.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn nd_status(dst: *mut u8, tx: u64, rx: u64) {
+    let mut n = nd_copy(dst, 0, addr_of!(ND_STATUS_P) as *const u8, ND_STATUS_P_LEN);
+    n = nd_dec(dst, n, tx);
+    n = nd_copy(dst, n, addr_of!(ND_RX_MID) as *const u8, ND_RX_MID_LEN);
+    n = nd_dec(dst, n, rx);
+    n = nd_copy(dst, n, addr_of!(ND_MODE) as *const u8, ND_MODE_LEN);
+    sys3(SYS_SEND, 0, dst as u64, n as u64);
+}
+
+/// Emit the required RX event, then return the bounded RX reply.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn nd_rx_count(dst: *mut u8, rx: u64) {
+    let mut n = nd_copy(
+        dst,
+        0,
+        addr_of!(ND_RX_EVENT_P) as *const u8,
+        ND_RX_EVENT_P_LEN,
+    );
+    n = nd_dec(dst, n, rx);
+    if n < 64 {
+        // SAFETY: n < 64.
+        unsafe { write_volatile(dst.add(n), b'\n') };
+        n += 1;
+    }
+    uwrite_ptr(dst as *const u8, n);
+
+    n = nd_copy(
+        dst,
+        0,
+        addr_of!(ND_RX_REPLY_P) as *const u8,
+        ND_RX_REPLY_P_LEN,
+    );
+    n = nd_dec(dst, n, rx);
+    sys3(SYS_SEND, 0, dst as u64, n as u64);
+}
+
+/// Synthetic network driver: one fixed-size request in, one bounded reply
+/// out. It stores only TX/RX counters; no packet payload, protocol parser,
+/// queue, socket, or network stack exists. The IRQ receive is the existing
+/// synthetic start/liveness mechanism. Restart re-enters with zero counters.
+#[link_section = ".user.text"]
+extern "C" fn net_driver_body() -> ! {
+    let mut info = MaybeUninit::<[u8; 128]>::uninit();
+    let ip = addr_of_mut!(info) as *mut u8;
+    let mut cmd = MaybeUninit::<[u8; 64]>::uninit();
+    let cp = addr_of_mut!(cmd) as *mut u8;
+    let mut reply = MaybeUninit::<[u8; 64]>::uninit();
+    let rp = addr_of_mut!(reply) as *mut u8;
+    let mut tx = 0u64;
+    let mut rx = 0u64;
+
+    // Capability slot 1 is the explicit net0 device grant; slot 2 is
+    // its synthetic IRQ endpoint (wired by AXIOM-NET-007).
+    sys3(SYS_DEVICE_INFO, 1, ip as u64, 128);
+    uput!(ND_STARTED, ND_STARTED_LEN);
+    sys3(SYS_RECV, 2, cp as u64, 1);
+
+    loop {
+        let r = sys3(SYS_RECV, 0, cp as u64, 64);
+        if r <= 0 {
+            continue;
+        }
+        let n = r as usize;
+        if eqs(cp, n, addr_of!(NDC_STATUS) as *const u8, NDC_STATUS_LEN) {
+            nd_status(rp, tx, rx);
+        } else if eqs(cp, n, addr_of!(NDC_TX) as *const u8, NDC_TX_LEN) {
+            if tx == u64::MAX || rx == u64::MAX {
+                sys3(
+                    SYS_SEND,
+                    0,
+                    addr_of!(ND_TOO_LARGE) as u64,
+                    ND_TOO_LARGE_LEN as u64,
+                );
+            } else {
+                tx += 1;
+                rx += 1;
+                uput!(ND_TX_EVENT, ND_TX_EVENT_LEN);
+                sys3(
+                    SYS_SEND,
+                    0,
+                    addr_of!(ND_TX_REPLY) as u64,
+                    ND_TX_REPLY_LEN as u64,
+                );
+            }
+        } else if eqs(cp, n, addr_of!(NDC_RX) as *const u8, NDC_RX_LEN) {
+            nd_rx_count(rp, rx);
+        } else if eqs(cp, n, addr_of!(NDC_FAULT) as *const u8, NDC_FAULT_LEN) {
+            // Deliberate contained U-mode page fault for AXIOM-NET-009.
+            // SAFETY: intentionally invalid and isolated to this task.
+            unsafe { write_volatile(0x4000_0000 as *mut u8, 1) };
+            // SAFETY: watchdog fallback if fault delivery regresses.
+            unsafe { core::arch::asm!("1:", "j 1b", options(noreturn)) }
+        } else if eqs(cp, n, addr_of!(NDC_RESTART) as *const u8, NDC_RESTART_LEN) {
+            // A task cannot restart itself; driver_manager owns policy.
+            sys3(
+                SYS_SEND,
+                0,
+                addr_of!(ND_UNSUPPORTED) as u64,
+                ND_UNSUPPORTED_LEN as u64,
+            );
+        } else {
+            sys3(SYS_SEND, 0, addr_of!(ND_BAD) as u64, ND_BAD_LEN as u64);
         }
     }
 }

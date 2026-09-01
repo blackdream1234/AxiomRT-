@@ -125,6 +125,43 @@ impl Default for NetworkRights {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverModelError {
+    CounterOverflow,
+}
+
+/// Bounded synthetic TX/RX model used by v1.7.
+///
+/// It stores counters only; no packet payload or queue can grow. One test
+/// transmission also models one deterministic loopback reception.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SyntheticDriverModel {
+    tx: u64,
+    rx: u64,
+}
+
+impl SyntheticDriverModel {
+    pub const fn tx(self) -> u64 {
+        self.tx
+    }
+
+    pub const fn rx(self) -> u64 {
+        self.rx
+    }
+
+    pub fn send_test(&mut self) -> Result<usize, DriverModelError> {
+        let Some(next_tx) = self.tx.checked_add(1) else {
+            return Err(DriverModelError::CounterOverflow);
+        };
+        let Some(next_rx) = self.rx.checked_add(1) else {
+            return Err(DriverModelError::CounterOverflow);
+        };
+        self.tx = next_tx;
+        self.rx = next_rx;
+        Ok(TEST_PACKET_BYTES)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,5 +273,23 @@ mod tests {
         assert!(observer.contains(NetworkRights::RX));
         assert!(!observer.contains(NetworkRights::TX));
         assert!(!observer.contains(NetworkRights::CONTROL));
+    }
+
+    #[test]
+    fn synthetic_test_packet_has_bounded_deterministic_counters() {
+        let mut driver = SyntheticDriverModel::default();
+        assert_eq!((driver.tx(), driver.rx()), (0, 0));
+        assert_eq!(driver.send_test(), Ok(TEST_PACKET_BYTES));
+        assert_eq!((driver.tx(), driver.rx()), (1, 1));
+        assert_eq!(driver.send_test(), Ok(TEST_PACKET_BYTES));
+        assert_eq!((driver.tx(), driver.rx()), (2, 2));
+
+        let saturated = SyntheticDriverModel {
+            tx: u64::MAX,
+            rx: 7,
+        };
+        let mut copy = saturated;
+        assert_eq!(copy.send_test(), Err(DriverModelError::CounterOverflow));
+        assert_eq!(copy, saturated, "overflow cannot partially update counters");
     }
 }

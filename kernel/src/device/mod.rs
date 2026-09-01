@@ -15,11 +15,12 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceId(pub u32);
 
-/// Device classes known to the kernel. v1.5 supports only the block
-/// device skeleton (docs/31 §5); the kind carries no protocol policy.
+/// Device classes known to the kernel. Kinds carry identity only, never
+/// device protocol policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceKind {
     BlockDeviceSkeleton,
+    SyntheticNetwork,
 }
 
 /// One MMIO register window (docs/31 §7). `base` is a physical bus
@@ -70,6 +71,7 @@ impl DeviceRights {
     pub const DMA_WRITE: DeviceRights = DeviceRights(1 << 4);
     pub const IRQ_RECEIVE: DeviceRights = DeviceRights(1 << 5);
     pub const DRIVER_CONTROL: DeviceRights = DeviceRights(1 << 6);
+    pub const NETWORK_DRIVER: DeviceRights = DeviceRights(1 << 7);
 
     pub const fn union(self, other: DeviceRights) -> DeviceRights {
         DeviceRights(self.0 | other.0)
@@ -239,6 +241,14 @@ mod tests {
         },
     };
 
+    const NET0: DeviceObject = DeviceObject {
+        id: DeviceId(1),
+        kind: DeviceKind::SyntheticNetwork,
+        mmio: MmioRegion { base: 0, size: 0 },
+        irq: IrqLine { endpoint: 10 },
+        dma: DmaRegion { base: 0, size: 0 },
+    };
+
     fn table() -> DeviceTable<1> {
         DeviceTable::new([BLOCK0])
     }
@@ -334,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn all_seven_device_rights_are_distinct() {
+    fn all_eight_device_rights_are_distinct() {
         let all = [
             DeviceRights::DEVICE_INFO,
             DeviceRights::MMIO_READ,
@@ -343,6 +353,7 @@ mod tests {
             DeviceRights::DMA_WRITE,
             DeviceRights::IRQ_RECEIVE,
             DeviceRights::DRIVER_CONTROL,
+            DeviceRights::NETWORK_DRIVER,
         ];
         for (i, a) in all.iter().enumerate() {
             for (j, b) in all.iter().enumerate() {
@@ -351,6 +362,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn synthetic_network_capability_names_only_net0() {
+        let devices = DeviceTable::new([BLOCK0, NET0]);
+        let net = DeviceCapability::new(
+            DeviceId(1),
+            DeviceRights::DEVICE_INFO
+                .union(DeviceRights::IRQ_RECEIVE)
+                .union(DeviceRights::NETWORK_DRIVER),
+        );
+        let dev = devices
+            .check(Some(&net), DeviceId(1), DeviceRights::NETWORK_DRIVER)
+            .expect("explicit net0 capability resolves");
+        assert_eq!(dev.kind, DeviceKind::SyntheticNetwork);
+        assert_eq!(
+            devices.check(Some(&net), DeviceId(0), DeviceRights::NETWORK_DRIVER),
+            Err(DeviceAccessError::WrongDevice)
+        );
+        assert!(!net.rights().contains(DeviceRights::MMIO_READ));
+        assert!(!net.rights().contains(DeviceRights::DMA_WRITE));
     }
 
     /// AXIOM-DRV-003: an MMIO operation is legal only when the fixed
