@@ -66,8 +66,9 @@ const OTYPE_DEVICE: u8 = 4;
 const RIGHT_SEND: u16 = 1 << 3;
 const RIGHT_RECV: u16 = 1 << 4;
 const RIGHT_CONTROL: u16 = 1 << 7;
-/// Capability slots per task (small, static).
-pub const CAPS_PER_TASK: usize = 8;
+/// Capability slots per task (small, static). v1.7 adds one explicit
+/// shell-to-network-service endpoint without removing prior authority.
+pub const CAPS_PER_TASK: usize = 9;
 
 /// On-target capability: (object type, object id, rights). The running
 /// form of the host `Capability` (docs/06 §3).
@@ -132,6 +133,17 @@ pub const CAP_RIGHT_FS_LIST: u16 = 1 << 6;
 pub const CAP_RIGHT_STORAGE_INFO: u16 = 1 << 8;
 #[allow(dead_code)] // os_boot-only API
 pub const CAP_RIGHT_STORAGE_READ: u16 = 1 << 9;
+// Network rights (docs/34 §7): declarative bits on network endpoint
+// capabilities. U-mode net_service enforces operation policy; the kernel
+// checks only generic Send/Recv transport rights and parses no net command.
+#[allow(dead_code)] // os_boot-only API
+pub const CAP_RIGHT_NET_STATUS: u16 = 1 << 10;
+#[allow(dead_code)] // os_boot-only API
+pub const CAP_RIGHT_NET_TX: u16 = 1 << 11;
+#[allow(dead_code)] // os_boot-only API
+pub const CAP_RIGHT_NET_RX: u16 = 1 << 12;
+#[allow(dead_code)] // os_boot-only API
+pub const CAP_RIGHT_NET_CONTROL: u16 = 1 << 13;
 // Device rights (docs/31 §10): meaningful on OTYPE_DEVICE capabilities
 // only. Deny-by-default; bit values mirror the host model
 // (kernel/src/device). No task holds all of them (least privilege).

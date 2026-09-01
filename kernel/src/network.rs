@@ -87,6 +87,44 @@ fn validate(message: &[u8]) -> Result<(), ProtocolError> {
     }
 }
 
+/// Declarative rights carried by network endpoint capabilities.
+///
+/// Transport SEND/RECEIVE checks remain generic kernel mechanism. These
+/// rights describe which network-service operation the holder may request;
+/// the U-mode service enforces that policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetworkRights(u16);
+
+impl NetworkRights {
+    pub const NONE: Self = Self(0);
+    pub const STATUS: Self = Self(1 << 0);
+    pub const TX: Self = Self(1 << 1);
+    pub const RX: Self = Self(1 << 2);
+    pub const CONTROL: Self = Self(1 << 3);
+
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub const fn contains(self, required: Self) -> bool {
+        self.0 & required.0 == required.0
+    }
+
+    pub const fn diminish(self, removed: Self) -> Self {
+        Self(self.0 & !removed.0)
+    }
+
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
+}
+
+impl Default for NetworkRights {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +200,41 @@ mod tests {
         assert_eq!(ProtocolError::Malformed.reply(), b"ERR malformed");
         assert_eq!(ProtocolError::TooLarge.reply(), b"ERR too_large");
         assert_eq!(ProtocolError::Unsupported.reply(), b"ERR unsupported");
+    }
+
+    #[test]
+    fn four_network_rights_are_distinct() {
+        let rights = [
+            NetworkRights::STATUS,
+            NetworkRights::TX,
+            NetworkRights::RX,
+            NetworkRights::CONTROL,
+        ];
+        for (i, left) in rights.iter().enumerate() {
+            for (j, right) in rights.iter().enumerate() {
+                if i != j {
+                    assert!(!left.contains(*right));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn network_rights_are_deny_by_default_and_never_amplify() {
+        assert_eq!(NetworkRights::default(), NetworkRights::NONE);
+        assert!(!NetworkRights::NONE.contains(NetworkRights::STATUS));
+        assert!(!NetworkRights::NONE.contains(NetworkRights::TX));
+        assert!(!NetworkRights::NONE.contains(NetworkRights::RX));
+        assert!(!NetworkRights::NONE.contains(NetworkRights::CONTROL));
+
+        let operator = NetworkRights::STATUS
+            .union(NetworkRights::TX)
+            .union(NetworkRights::RX)
+            .union(NetworkRights::CONTROL);
+        let observer = operator.diminish(NetworkRights::TX.union(NetworkRights::CONTROL));
+        assert!(observer.contains(NetworkRights::STATUS));
+        assert!(observer.contains(NetworkRights::RX));
+        assert!(!observer.contains(NetworkRights::TX));
+        assert!(!observer.contains(NetworkRights::CONTROL));
     }
 }
