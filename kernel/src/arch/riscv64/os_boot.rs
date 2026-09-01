@@ -20,7 +20,8 @@ use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 
 use crate::dispatch::{
     self, cap_console, cap_control, cap_device, cap_endpoint, cap_info, Cap, ServiceDef,
-    CAP_RIGHT_CONTROL, CAP_RIGHT_FS_LIST, CAP_RIGHT_FS_READ, CAP_RIGHT_RECV, CAP_RIGHT_SEND,
+    CAP_RIGHT_CONTROL, CAP_RIGHT_FS_LIST, CAP_RIGHT_FS_READ, CAP_RIGHT_NET_CONTROL,
+    CAP_RIGHT_NET_RX, CAP_RIGHT_NET_STATUS, CAP_RIGHT_NET_TX, CAP_RIGHT_RECV, CAP_RIGHT_SEND,
     CAP_RIGHT_STORAGE_INFO, CAP_RIGHT_STORAGE_READ, DEV_RIGHT_DMA_READ, DEV_RIGHT_DMA_WRITE,
     DEV_RIGHT_DRIVER_CONTROL, DEV_RIGHT_INFO, DEV_RIGHT_IRQ_RECEIVE, DEV_RIGHT_MMIO_READ,
     DEV_RIGHT_NETWORK_DRIVER,
@@ -70,6 +71,8 @@ const EP_IRQ: u32 = 8;
 const EP_NET_DRV: u32 = 9;
 /// Synthetic net0 attention/liveness endpoint.
 const EP_NET_IRQ: u32 = 10;
+/// Shell <-> net_service command channel (docs/34 section 6).
+const EP_NET: u32 = 11;
 
 /// Service-table index of the faulty demo task (`run demo`).
 const SVC_FAULTY: u64 = 4;
@@ -88,7 +91,8 @@ const SLOT_BLOCK_DRIVER: u64 = 13;
 
 #[repr(C, align(4096))]
 struct Stack([u8; 4096]);
-static mut OS_STACKS: [Stack; 15] = [
+static mut OS_STACKS: [Stack; 16] = [
+    Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
     Stack([0; 4096]),
@@ -115,7 +119,7 @@ const NO_CAPS: [Option<Cap>; dispatch::CAPS_PER_TASK] = [None; dispatch::CAPS_PE
 /// Service table (docs/25 §3). Entry addresses, stacks, and capability
 /// grants are runtime values, patched once by `os_boot` before
 /// dispatching; the rest is fixed here.
-static mut TABLE: [ServiceDef; 14] = [
+static mut TABLE: [ServiceDef; 15] = [
     ServiceDef {
         name: "supervisor_service",
         entry: 0,
@@ -228,6 +232,14 @@ static mut TABLE: [ServiceDef; 14] = [
         slot: 14,
         caps: NO_CAPS,
     },
+    ServiceDef {
+        name: "net_service",
+        entry: 0,
+        stack_phys: 0,
+        prio: 2,
+        slot: 15,
+        caps: NO_CAPS,
+    },
 ];
 
 fn stack_phys(i: usize) -> u64 {
@@ -240,7 +252,7 @@ fn stack_phys(i: usize) -> u64 {
 /// timer, dispatch.
 pub fn os_boot() -> ! {
     // SAFETY: single hart, boot-time exclusive access, before start().
-    let table: &'static mut [ServiceDef; 14] = unsafe { &mut *addr_of_mut!(TABLE) };
+    let table: &'static mut [ServiceDef; 15] = unsafe { &mut *addr_of_mut!(TABLE) };
     table[0].entry = supervisor_body as *const () as u64;
     table[0].stack_phys = stack_phys(1);
     table[0].caps[0] = Some(cap_endpoint(EP_FAULT, CAP_RIGHT_RECV | CAP_RIGHT_CONTROL));
@@ -355,6 +367,22 @@ pub fn os_boot() -> ! {
     ));
     table[13].caps[2] = Some(cap_endpoint(EP_NET_IRQ, CAP_RIGHT_RECV));
     table[13].caps[3] = Some(cap_console(CAP_RIGHT_SEND));
+    // net_service (docs/34 section 2/7): shell-facing network endpoint,
+    // private driver channel, and console evidence. It deliberately has
+    // no device, MMIO, DMA, task-control, filesystem, or storage grant.
+    table[14].entry = net_service_body as *const () as u64;
+    table[14].stack_phys = stack_phys(15);
+    table[14].caps[0] = Some(cap_endpoint(
+        EP_NET,
+        CAP_RIGHT_RECV
+            | CAP_RIGHT_SEND
+            | CAP_RIGHT_NET_STATUS
+            | CAP_RIGHT_NET_TX
+            | CAP_RIGHT_NET_RX
+            | CAP_RIGHT_NET_CONTROL,
+    ));
+    table[14].caps[1] = Some(cap_endpoint(EP_NET_DRV, CAP_RIGHT_SEND | CAP_RIGHT_RECV));
+    table[14].caps[2] = Some(cap_console(CAP_RIGHT_SEND));
 
     // SAFETY: boot-time, single hart, called once.
     unsafe { dispatch::set_service_table(table) };
@@ -2012,6 +2040,185 @@ extern "C" fn net_driver_body() -> ! {
     }
 }
 
+// ---------------------------------------------------------------------
+// net_service (U-mode): shell-facing bounded network policy
+// (AXIOM-NET-006; docs/34 sections 2/6)
+// ---------------------------------------------------------------------
+
+umsg!(
+    NS_STARTED,
+    NS_STARTED_LEN,
+    b"NET_SERVICE state=up mode=synthetic\n"
+);
+umsg!(
+    NS_BAD_EVENT,
+    NS_BAD_EVENT_LEN,
+    b"NET_DENIED reason=malformed\n"
+);
+umsg!(NS_BAD, NS_BAD_LEN, b"ERR malformed");
+umsg!(NS_DOWN, NS_DOWN_LEN, b"ERR driver_down");
+umsg!(NS_UNSUPPORTED, NS_UNSUPPORTED_LEN, b"ERR unsupported");
+umsg!(
+    NS_STATUS_P,
+    NS_STATUS_P_LEN,
+    b"OK net state=up driver=running tx="
+);
+umsg!(NS_STATS_P, NS_STATS_P_LEN, b"OK tx=");
+umsg!(NS_RX_MID, NS_RX_MID_LEN, b" rx=");
+umsg!(NS_MODE, NS_MODE_LEN, b" mode=synthetic");
+umsg!(NS_TX_EVENT_P, NS_TX_EVENT_P_LEN, b"NET_TX bytes=64 tx=");
+umsg!(NS_RX_EVENT_P, NS_RX_EVENT_P_LEN, b"NET_RX rx=");
+umsg!(NSC_STATUS, NSC_STATUS_LEN, b"NET_STATUS");
+umsg!(NSC_STATS, NSC_STATS_LEN, b"NET_STATS");
+umsg!(NSC_TX, NSC_TX_LEN, b"NET_SEND_TEST");
+umsg!(NSC_RX, NSC_RX_LEN, b"NET_RX_COUNT");
+umsg!(NSC_FAULT, NSC_FAULT_LEN, b"NET_FAULT");
+umsg!(NSC_RESTART, NSC_RESTART_LEN, b"NET_RESTART");
+
+/// Send one fixed command to net_driver_service and receive its bounded
+/// reply. Capability slot 1 is the only driver-facing authority.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ns_driver(cmd: *const u8, len: usize, reply: *mut u8) -> i64 {
+    if sys3(SYS_SEND, 1, cmd as u64, len as u64) < 0 {
+        return -1;
+    }
+    sys3(SYS_RECV, 1, reply as u64, 64)
+}
+
+/// Send a bounded network-service reply to the shell-facing endpoint.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ns_reply(p: *const u8, len: usize) {
+    sys3(SYS_SEND, 0, p as u64, len as u64);
+}
+
+/// Append a newline to a bounded event buffer and emit it.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ns_event(dst: *mut u8, n: usize) {
+    let mut len = n;
+    if len < 64 {
+        // SAFETY: len is inside the fixed event buffer.
+        unsafe { write_volatile(dst.add(len), b'\n') };
+        len += 1;
+    }
+    uwrite_ptr(dst as *const u8, len);
+}
+
+/// Construct the documented status line from service-owned counters.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ns_status(dst: *mut u8, tx: u64, rx: u64) {
+    let mut n = nd_copy(dst, 0, addr_of!(NS_STATUS_P) as *const u8, NS_STATUS_P_LEN);
+    n = nd_dec(dst, n, tx);
+    n = nd_copy(dst, n, addr_of!(NS_RX_MID) as *const u8, NS_RX_MID_LEN);
+    n = nd_dec(dst, n, rx);
+    n = nd_copy(dst, n, addr_of!(NS_MODE) as *const u8, NS_MODE_LEN);
+    ns_reply(dst as *const u8, n);
+}
+
+/// Construct the compact counter-only reply.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ns_stats(dst: *mut u8, tx: u64, rx: u64) {
+    let mut n = nd_copy(dst, 0, addr_of!(NS_STATS_P) as *const u8, NS_STATS_P_LEN);
+    n = nd_dec(dst, n, tx);
+    n = nd_copy(dst, n, addr_of!(NS_RX_MID) as *const u8, NS_RX_MID_LEN);
+    n = nd_dec(dst, n, rx);
+    ns_reply(dst as *const u8, n);
+}
+
+/// Emit the service-level TX and synthetic loopback RX events.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ns_packet_events(dst: *mut u8, tx: u64, rx: u64) {
+    let mut n = nd_copy(
+        dst,
+        0,
+        addr_of!(NS_TX_EVENT_P) as *const u8,
+        NS_TX_EVENT_P_LEN,
+    );
+    n = nd_dec(dst, n, tx);
+    ns_event(dst, n);
+
+    n = nd_copy(
+        dst,
+        0,
+        addr_of!(NS_RX_EVENT_P) as *const u8,
+        NS_RX_EVENT_P_LEN,
+    );
+    n = nd_dec(dst, n, rx);
+    ns_event(dst, n);
+}
+
+/// User-space network policy service. It recognizes only the six bounded
+/// protocol frames in docs/34. Status/stats probe the driver before
+/// replying; send-test asks the driver to account one fixed 64-byte
+/// synthetic packet. There is no packet parsing or device access here.
+#[link_section = ".user.text"]
+extern "C" fn net_service_body() -> ! {
+    let mut cmd = MaybeUninit::<[u8; 128]>::uninit();
+    let cp = addr_of_mut!(cmd) as *mut u8;
+    let mut driver_reply = MaybeUninit::<[u8; 64]>::uninit();
+    let dp = addr_of_mut!(driver_reply) as *mut u8;
+    let mut reply = MaybeUninit::<[u8; 64]>::uninit();
+    let rp = addr_of_mut!(reply) as *mut u8;
+    let mut tx = 0u64;
+    let mut rx = 0u64;
+
+    uput!(NS_STARTED, NS_STARTED_LEN);
+    loop {
+        let r = sys3(SYS_RECV, 0, cp as u64, 128);
+        if r <= 0 {
+            continue;
+        }
+        let n = r as usize;
+        if eqs(cp, n, addr_of!(NSC_STATUS) as *const u8, NSC_STATUS_LEN) {
+            if ns_driver(addr_of!(NDC_STATUS) as *const u8, NDC_STATUS_LEN, dp) > 0 {
+                ns_status(rp, tx, rx);
+            } else {
+                ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+            }
+        } else if eqs(cp, n, addr_of!(NSC_STATS) as *const u8, NSC_STATS_LEN) {
+            if ns_driver(addr_of!(NDC_STATUS) as *const u8, NDC_STATUS_LEN, dp) > 0 {
+                ns_stats(rp, tx, rx);
+            } else {
+                ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+            }
+        } else if eqs(cp, n, addr_of!(NSC_TX) as *const u8, NSC_TX_LEN) {
+            let dr = ns_driver(addr_of!(NDC_TX) as *const u8, NDC_TX_LEN, dp);
+            if dr > 0 {
+                if tx == u64::MAX || rx == u64::MAX {
+                    ns_reply(addr_of!(ND_TOO_LARGE) as *const u8, ND_TOO_LARGE_LEN);
+                } else {
+                    tx += 1;
+                    rx += 1;
+                    ns_packet_events(rp, tx, rx);
+                    ns_reply(dp as *const u8, dr as usize);
+                }
+            } else {
+                ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+            }
+        } else if eqs(cp, n, addr_of!(NSC_RX) as *const u8, NSC_RX_LEN) {
+            let dr = ns_driver(addr_of!(NDC_RX) as *const u8, NDC_RX_LEN, dp);
+            if dr > 0 {
+                ns_reply(dp as *const u8, dr as usize);
+            } else {
+                ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+            }
+        } else if eqs(cp, n, addr_of!(NSC_FAULT) as *const u8, NSC_FAULT_LEN)
+            || eqs(cp, n, addr_of!(NSC_RESTART) as *const u8, NSC_RESTART_LEN)
+        {
+            // Lifecycle authority belongs to driver_manager and is wired
+            // in AXIOM-NET-009, never directly to the shell-facing task.
+            ns_reply(addr_of!(NS_UNSUPPORTED) as *const u8, NS_UNSUPPORTED_LEN);
+        } else {
+            uput!(NS_BAD_EVENT, NS_BAD_EVENT_LEN);
+            ns_reply(addr_of!(NS_BAD) as *const u8, NS_BAD_LEN);
+        }
+    }
+}
 // ---------------------------------------------------------------------
 // driver_manager (U-mode): driver lifecycle policy (AXIOM-DRV-006)
 // ---------------------------------------------------------------------

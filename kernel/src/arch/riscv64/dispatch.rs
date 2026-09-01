@@ -249,7 +249,7 @@ const EMPTY_TCB: Tcb = Tcb {
 
 /// Maximum on-target tasks (14 since the driver phase: 12 + the
 /// driver_manager and block_driver_service slots, docs/31 §4/§5).
-pub const MAX_TASKS: usize = 15;
+pub const MAX_TASKS: usize = 16;
 
 static mut TASKS: [Tcb; MAX_TASKS] = [EMPTY_TCB; MAX_TASKS];
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
@@ -284,7 +284,7 @@ enum Ep {
 /// 4 = filesystem channel (docs/28), 5 = storage channel (docs/29),
 /// 6 = driver-manager channel, 7 = driver command channel, 8 = driver
 /// IRQ events (docs/31).
-const NUM_ENDPOINTS: usize = 11;
+const NUM_ENDPOINTS: usize = 12;
 static mut ENDPOINTS: [Ep; NUM_ENDPOINTS] = [Ep::Idle; NUM_ENDPOINTS];
 /// Kernel staging buffer for user send→recv copies (bounded, no shared
 /// memory, docs/17 §2).
