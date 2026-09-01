@@ -286,10 +286,19 @@ pub fn os_boot() -> ! {
     ));
     // Driver-manager channel (docs/31 §4): the shell's ONLY path to
     // drivers is forwarding text lines to driver_manager — it holds no
-    // device capability and can never reach MMIO. The shell's table is
-    // now full: 8/8 of CAPS_PER_TASK (line, console, info, control,
-    // app, fs, storage, driver-manager) — checked by the driver test.
+    // device capability and can never reach MMIO.
     table[3].caps[7] = Some(cap_endpoint(EP_DRV, CAP_RIGHT_SEND | CAP_RIGHT_RECV));
+    // Shell network authority terminates at net_service. The ninth and
+    // final slot preserves all older grants and adds no device access.
+    table[3].caps[8] = Some(cap_endpoint(
+        EP_NET,
+        CAP_RIGHT_SEND
+            | CAP_RIGHT_RECV
+            | CAP_RIGHT_NET_STATUS
+            | CAP_RIGHT_NET_TX
+            | CAP_RIGHT_NET_RX
+            | CAP_RIGHT_NET_CONTROL,
+    ));
     table[4].entry = faulty_body as *const () as u64;
     table[4].stack_phys = stack_phys(5);
     // faulty_task: no capabilities at all (its IPC attempt is denied).
@@ -2495,12 +2504,12 @@ umsg!(M_PROMPT, M_PROMPT_LEN, b"axiom> ");
 umsg!(
     M_HELP,
     M_HELP_LEN,
-    b"commands: help version tasks faults ipc caps memory uptime events\n          run demo | kill <idx> | restart <idx> | clear | shutdown\n          drivers | driver <info|restart|fault> block\n          bin | app <load|unload|state> <name> | run loaded <name>\n"
+    b"commands: help version tasks faults ipc caps memory uptime events\n          run demo | kill <idx> | restart <idx> | clear | shutdown\n          drivers | driver <info|restart|fault> block\n          bin | app <load|unload|state> <name> | run loaded <name>\n          net <status|stats|send-test|rx-count|fault|restart>\n"
 );
 umsg!(
     M_VERSION,
     M_VERSION_LEN,
-    b"AxiomRT v1.6-storage-backed-loader RISC-V 64 (QEMU eval)\n"
+    b"AxiomRT v1.7-minimal-network-service RISC-V 64 (QEMU eval)\n"
 );
 umsg!(M_UNKNOWN, M_UNKNOWN_LEN, b"unknown command (try: help)\n");
 umsg!(M_ERR, M_ERR_LEN, b"error\n");
@@ -2530,6 +2539,13 @@ umsg!(C_APPSTATE, C_APPSTATE_LEN, b"app state ");
 umsg!(C_RUNLOADED, C_RUNLOADED_LEN, b"run loaded ");
 umsg!(C_DRIVERS, C_DRIVERS_LEN, b"drivers");
 umsg!(C_DRIVERSP, C_DRIVERSP_LEN, b"driver ");
+umsg!(C_NET_STATUS, C_NET_STATUS_LEN, b"net status");
+umsg!(C_NET_STATS, C_NET_STATS_LEN, b"net stats");
+umsg!(C_NET_SEND, C_NET_SEND_LEN, b"net send-test");
+umsg!(C_NET_RX, C_NET_RX_LEN, b"net rx-count");
+umsg!(C_NET_FAULT, C_NET_FAULT_LEN, b"net fault");
+umsg!(C_NET_RESTART, C_NET_RESTART_LEN, b"net restart");
+umsg!(C_NET_PREFIX, C_NET_PREFIX_LEN, b"net ");
 umsg!(C_STORI, C_STORI_LEN, b"storage info");
 umsg!(C_STORR, C_STORR_LEN, b"storage read ");
 umsg!(C_LS, C_LS_LEN, b"ls");
@@ -2621,6 +2637,25 @@ fn shell_drv_forward(bp: *mut u8, n: usize, rp: *mut u8) {
         return;
     }
     let r = sys3(SYS_RECV, 7, rp as u64, 64);
+    if r > 0 {
+        uwrite_ptr(rp, r as usize);
+        uput!(M_NL, M_NL_LEN);
+    } else {
+        uput!(M_ERR, M_ERR_LEN);
+    }
+}
+
+/// Forward one protocol frame to net_service on capability slot 8 and
+/// print its bounded reply. The shell translates presentation commands
+/// only; it has no driver or device capability (docs/34 section 7).
+#[link_section = ".user.text"]
+#[inline(never)]
+fn shell_net_forward(p: *const u8, n: usize, rp: *mut u8) {
+    if sys3(SYS_SEND, 8, p as u64, n as u64) < 0 {
+        uput!(M_ERR, M_ERR_LEN);
+        return;
+    }
+    let r = sys3(SYS_RECV, 8, rp as u64, 64);
     if r > 0 {
         uwrite_ptr(rp, r as usize);
         uput!(M_NL, M_NL_LEN);
@@ -2813,6 +2848,22 @@ extern "C" fn shell_body() -> ! {
                 qp,
                 op,
             );
+        } else if is_cmd!(bp, n, C_NET_STATUS, C_NET_STATUS_LEN) {
+            shell_net_forward(addr_of!(NSC_STATUS) as *const u8, NSC_STATUS_LEN, op);
+        } else if is_cmd!(bp, n, C_NET_STATS, C_NET_STATS_LEN) {
+            shell_net_forward(addr_of!(NSC_STATS) as *const u8, NSC_STATS_LEN, op);
+        } else if is_cmd!(bp, n, C_NET_SEND, C_NET_SEND_LEN) {
+            shell_net_forward(addr_of!(NSC_TX) as *const u8, NSC_TX_LEN, op);
+        } else if is_cmd!(bp, n, C_NET_RX, C_NET_RX_LEN) {
+            shell_net_forward(addr_of!(NSC_RX) as *const u8, NSC_RX_LEN, op);
+        } else if is_cmd!(bp, n, C_NET_FAULT, C_NET_FAULT_LEN) {
+            shell_net_forward(addr_of!(NSC_FAULT) as *const u8, NSC_FAULT_LEN, op);
+        } else if is_cmd!(bp, n, C_NET_RESTART, C_NET_RESTART_LEN) {
+            shell_net_forward(addr_of!(NSC_RESTART) as *const u8, NSC_RESTART_LEN, op);
+        } else if starts_with(bp, n, addr_of!(C_NET_PREFIX) as *const u8, C_NET_PREFIX_LEN) {
+            // Unknown network presentation commands still cross the
+            // service boundary and receive its safe ERR malformed reply.
+            shell_net_forward(bp as *const u8, n, op);
         } else if is_cmd!(bp, n, C_DRIVERS, C_DRIVERS_LEN)
             || starts_with(bp, n, addr_of!(C_DRIVERSP) as *const u8, C_DRIVERSP_LEN)
         {
