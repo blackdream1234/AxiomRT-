@@ -88,6 +88,8 @@ const TBL_NET_SERVICE: u64 = 14;
 const TBL_BLOCK_DRIVER: u64 = 12;
 /// TCB slot of block_driver_service (sys_task_restart takes slots).
 const SLOT_BLOCK_DRIVER: u64 = 13;
+/// TCB slot of net_driver_service.
+const SLOT_NET_DRIVER: u64 = 14;
 
 // ---------------------------------------------------------------------
 // Boot (S-mode)
@@ -399,7 +401,10 @@ pub fn os_boot() -> ! {
             | CAP_RIGHT_NET_CONTROL,
     ));
     table[14].caps[1] = Some(cap_endpoint(EP_NET_DRV, CAP_RIGHT_SEND | CAP_RIGHT_RECV));
-    table[14].caps[2] = Some(cap_console(CAP_RIGHT_SEND));
+    // Lifecycle requests go to driver_manager; only the manager holds
+    // task-control and net0 driver-control authority.
+    table[14].caps[2] = Some(cap_endpoint(EP_DRV, CAP_RIGHT_SEND | CAP_RIGHT_RECV));
+    table[14].caps[3] = Some(cap_console(CAP_RIGHT_SEND));
 
     // SAFETY: boot-time, single hart, called once.
     unsafe { dispatch::set_service_table(table) };
@@ -2078,7 +2083,7 @@ umsg!(
 );
 umsg!(NS_BAD, NS_BAD_LEN, b"ERR malformed");
 umsg!(NS_DOWN, NS_DOWN_LEN, b"ERR driver_down");
-umsg!(NS_UNSUPPORTED, NS_UNSUPPORTED_LEN, b"ERR unsupported");
+umsg!(NS_OK, NS_OK_LEN, b"OK");
 umsg!(
     NS_STATUS_P,
     NS_STATUS_P_LEN,
@@ -2095,6 +2100,8 @@ umsg!(NSC_TX, NSC_TX_LEN, b"NET_SEND_TEST");
 umsg!(NSC_RX, NSC_RX_LEN, b"NET_RX_COUNT");
 umsg!(NSC_FAULT, NSC_FAULT_LEN, b"NET_FAULT");
 umsg!(NSC_RESTART, NSC_RESTART_LEN, b"NET_RESTART");
+umsg!(NSM_FAULT, NSM_FAULT_LEN, b"NET_MGR_FAULT");
+umsg!(NSM_RESTART, NSM_RESTART_LEN, b"NET_MGR_RESTART");
 
 /// Send one fixed command to net_driver_service and receive its bounded
 /// reply. Capability slot 1 is the only driver-facing authority.
@@ -2107,6 +2114,16 @@ fn ns_driver(cmd: *const u8, len: usize, reply: *mut u8) -> i64 {
     sys3(SYS_RECV, 1, reply as u64, 64)
 }
 
+/// Ask driver_manager to apply lifecycle policy. Capability slot 2 is
+/// an IPC endpoint only; net_service never receives task control.
+#[link_section = ".user.text"]
+#[inline(never)]
+fn ns_manager(cmd: *const u8, len: usize, reply: *mut u8) -> i64 {
+    if sys3(SYS_SEND, 2, cmd as u64, len as u64) < 0 {
+        return -1;
+    }
+    sys3(SYS_RECV, 2, reply as u64, 64)
+}
 /// Send a bounded network-service reply to the shell-facing endpoint.
 #[link_section = ".user.text"]
 #[inline(never)]
@@ -2187,6 +2204,7 @@ extern "C" fn net_service_body() -> ! {
     let rp = addr_of_mut!(reply) as *mut u8;
     let mut tx = 0u64;
     let mut rx = 0u64;
+    let mut up = true;
 
     uput!(NS_STARTED, NS_STARTED_LEN);
     loop {
@@ -2196,44 +2214,76 @@ extern "C" fn net_service_body() -> ! {
         }
         let n = r as usize;
         if eqs(cp, n, addr_of!(NSC_STATUS) as *const u8, NSC_STATUS_LEN) {
-            if ns_driver(addr_of!(NDC_STATUS) as *const u8, NDC_STATUS_LEN, dp) > 0 {
+            if !up {
+                ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+            } else if ns_driver(addr_of!(NDC_STATUS) as *const u8, NDC_STATUS_LEN, dp) > 0 {
                 ns_status(rp, tx, rx);
             } else {
                 ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
             }
         } else if eqs(cp, n, addr_of!(NSC_STATS) as *const u8, NSC_STATS_LEN) {
-            if ns_driver(addr_of!(NDC_STATUS) as *const u8, NDC_STATUS_LEN, dp) > 0 {
+            if !up {
+                ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+            } else if ns_driver(addr_of!(NDC_STATUS) as *const u8, NDC_STATUS_LEN, dp) > 0 {
                 ns_stats(rp, tx, rx);
             } else {
                 ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
             }
         } else if eqs(cp, n, addr_of!(NSC_TX) as *const u8, NSC_TX_LEN) {
-            let dr = ns_driver(addr_of!(NDC_TX) as *const u8, NDC_TX_LEN, dp);
-            if dr > 0 {
-                if tx == u64::MAX || rx == u64::MAX {
-                    ns_reply(addr_of!(ND_TOO_LARGE) as *const u8, ND_TOO_LARGE_LEN);
-                } else {
-                    tx += 1;
-                    rx += 1;
-                    ns_packet_events(rp, tx, rx);
-                    ns_reply(dp as *const u8, dr as usize);
-                }
-            } else {
+            if !up {
                 ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+            } else {
+                let dr = ns_driver(addr_of!(NDC_TX) as *const u8, NDC_TX_LEN, dp);
+                if dr > 0 {
+                    if tx == u64::MAX || rx == u64::MAX {
+                        ns_reply(addr_of!(ND_TOO_LARGE) as *const u8, ND_TOO_LARGE_LEN);
+                    } else {
+                        tx += 1;
+                        rx += 1;
+                        ns_packet_events(rp, tx, rx);
+                        ns_reply(dp as *const u8, dr as usize);
+                    }
+                } else {
+                    ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+                }
             }
         } else if eqs(cp, n, addr_of!(NSC_RX) as *const u8, NSC_RX_LEN) {
-            let dr = ns_driver(addr_of!(NDC_RX) as *const u8, NDC_RX_LEN, dp);
-            if dr > 0 {
-                ns_reply(dp as *const u8, dr as usize);
+            if !up {
+                ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+            } else {
+                let dr = ns_driver(addr_of!(NDC_RX) as *const u8, NDC_RX_LEN, dp);
+                if dr > 0 {
+                    ns_reply(dp as *const u8, dr as usize);
+                } else {
+                    ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+                }
+            }
+        } else if eqs(cp, n, addr_of!(NSC_FAULT) as *const u8, NSC_FAULT_LEN) {
+            if !up {
+                ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+            } else {
+                let mr = ns_manager(addr_of!(NSM_FAULT) as *const u8, NSM_FAULT_LEN, dp);
+                if mr > 0 {
+                    if starts_with(dp, mr as usize, addr_of!(NS_OK) as *const u8, NS_OK_LEN) {
+                        up = false;
+                    }
+                    ns_reply(dp as *const u8, mr as usize);
+                } else {
+                    ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
+                }
+            }
+        } else if eqs(cp, n, addr_of!(NSC_RESTART) as *const u8, NSC_RESTART_LEN) {
+            let mr = ns_manager(addr_of!(NSM_RESTART) as *const u8, NSM_RESTART_LEN, dp);
+            if mr > 0 {
+                if starts_with(dp, mr as usize, addr_of!(NS_OK) as *const u8, NS_OK_LEN) {
+                    up = true;
+                    tx = 0;
+                    rx = 0;
+                }
+                ns_reply(dp as *const u8, mr as usize);
             } else {
                 ns_reply(addr_of!(NS_DOWN) as *const u8, NS_DOWN_LEN);
             }
-        } else if eqs(cp, n, addr_of!(NSC_FAULT) as *const u8, NSC_FAULT_LEN)
-            || eqs(cp, n, addr_of!(NSC_RESTART) as *const u8, NSC_RESTART_LEN)
-        {
-            // Lifecycle authority belongs to driver_manager and is wired
-            // in AXIOM-NET-009, never directly to the shell-facing task.
-            ns_reply(addr_of!(NS_UNSUPPORTED) as *const u8, NS_UNSUPPORTED_LEN);
         } else {
             uput!(NS_BAD_EVENT, NS_BAD_EVENT_LEN);
             ns_reply(addr_of!(NS_BAD) as *const u8, NS_BAD_LEN);
@@ -2314,6 +2364,33 @@ umsg!(
     b"DRIVER started=net_driver_service\n"
 );
 umsg!(DMR_RESTARTED, DMR_RESTARTED_LEN, b"restarted");
+umsg!(
+    DM_NET_OBSERVED,
+    DM_NET_OBSERVED_LEN,
+    b"DRIVER_MANAGER observed=fault driver=net_driver_service\n"
+);
+umsg!(
+    DM_NET_FAULTED,
+    DM_NET_FAULTED_LEN,
+    b"NET_DRIVER state=faulted\n"
+);
+umsg!(
+    DM_NET_RESTARTED,
+    DM_NET_RESTARTED_LEN,
+    b"NET_DRIVER restarted=net_driver_service\n"
+);
+umsg!(
+    DMR_NET_FAULTED,
+    DMR_NET_FAULTED_LEN,
+    b"OK network fault contained"
+);
+umsg!(DMR_NET_RESTARTED, DMR_NET_RESTARTED_LEN, b"OK restarted");
+umsg!(DMR_NET_NOTRUN, DMR_NET_NOTRUN_LEN, b"ERR driver_down");
+umsg!(
+    DMR_NET_RESTART_ERR,
+    DMR_NET_RESTART_ERR_LEN,
+    b"ERR unsupported"
+);
 umsg!(
     DMR_RESTART_ERR,
     DMR_RESTART_ERR_LEN,
@@ -2424,7 +2501,7 @@ extern "C" fn driver_manager_body() -> ! {
     // init_service has already started net_driver_service. Its manager
     // state becomes running only if the explicit net0 liveness/attention
     // delivery succeeds; this also releases the driver's startup wait.
-    let net_st: u8 = if sys3(SYS_IRQ_RAISE, 6, 0, 0) >= 0 {
+    let mut net_st: u8 = if sys3(SYS_IRQ_RAISE, 6, 0, 0) >= 0 {
         uput!(DM_NET_STARTED, DM_NET_STARTED_LEN);
         1
     } else {
@@ -2437,7 +2514,57 @@ extern "C" fn driver_manager_body() -> ! {
             continue;
         }
         let n = r as usize;
-        if eqs(bp, n, addr_of!(DMC_LIST) as *const u8, DMC_LIST_LEN) {
+        if eqs(bp, n, addr_of!(NSM_FAULT) as *const u8, NSM_FAULT_LEN) {
+            // net_service requests policy; only this manager holds both
+            // the driver command endpoint and task/device control.
+            if net_st != 1
+                || sys3(
+                    SYS_SEND,
+                    5,
+                    addr_of!(NDC_FAULT) as u64,
+                    NDC_FAULT_LEN as u64,
+                ) < 0
+            {
+                dm_reply(addr_of!(DMR_NET_NOTRUN) as *const u8, DMR_NET_NOTRUN_LEN);
+            } else {
+                let mut k: u32 = 0;
+                let mut dead = false;
+                while k < 16 {
+                    sys3(SYS_YIELD, 0, 0, 0);
+                    if sys3(SYS_IRQ_RAISE, 6, 0, 0) < 0 {
+                        dead = true;
+                        break;
+                    }
+                    k += 1;
+                }
+                if dead {
+                    net_st = 2;
+                    uput!(DM_NET_OBSERVED, DM_NET_OBSERVED_LEN);
+                    uput!(DM_NET_FAULTED, DM_NET_FAULTED_LEN);
+                    dm_reply(addr_of!(DMR_NET_FAULTED) as *const u8, DMR_NET_FAULTED_LEN);
+                } else {
+                    dm_reply(
+                        addr_of!(DMR_NET_RESTART_ERR) as *const u8,
+                        DMR_NET_RESTART_ERR_LEN,
+                    );
+                }
+            }
+        } else if eqs(bp, n, addr_of!(NSM_RESTART) as *const u8, NSM_RESTART_LEN) {
+            if sys3(SYS_TASK_RESTART, SLOT_NET_DRIVER, 0, 0) < 0 {
+                dm_reply(
+                    addr_of!(DMR_NET_RESTART_ERR) as *const u8,
+                    DMR_NET_RESTART_ERR_LEN,
+                );
+            } else {
+                net_st = 1;
+                uput!(DM_NET_RESTARTED, DM_NET_RESTARTED_LEN);
+                sys3(SYS_IRQ_RAISE, 6, 0, 0);
+                dm_reply(
+                    addr_of!(DMR_NET_RESTARTED) as *const u8,
+                    DMR_NET_RESTARTED_LEN,
+                );
+            }
+        } else if eqs(bp, n, addr_of!(DMC_LIST) as *const u8, DMC_LIST_LEN) {
             dm_list(st, net_st);
         } else if eqs(bp, n, addr_of!(DMC_INFO) as *const u8, DMC_INFO_LEN) {
             dm_info(st, sp);
