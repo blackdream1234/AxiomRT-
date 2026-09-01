@@ -40,5 +40,9 @@ pub mod device;
 // docs/32_RESTRICTED_APP_IMAGE_FORMAT.md §7).
 pub mod loader;
 
+// Bounded minimal network-service protocol (Phase v1.7,
+// docs/34_NETWORK_SERVICE.md).
+pub mod network;
+
 // Runtime monitoring events (Phase 11, docs/11_RUNTIME_MONITORING.md).
 pub mod monitor;
