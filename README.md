@@ -27,20 +27,18 @@ docs/01_SCOPE_AND_NON_GOALS.md.
 
 ## 3. Current phase
 
-* **Current milestone:** `v1.6-storage-backed-loader` — restricted
-  app image loading: the `AXAPP1` bounded image record format, a `/bin`
-  read-only tree whose valid records are storage-backed (fetched from
-  storage blocks via the fs→storage chain), a user-space loader
-  validator (magic, checksum, layout, W^X-by-separation, per-app
-  capability policy), a loaded-app state machine, and shell `bin` /
-  `app load|unload|state <name>` / `run loaded <name>` — safe loading,
-  running, rejection of malformed/over-privileged images, and fault
-  containment, all proven in QEMU (docs/32, docs/33). Earlier:
+* **Current milestone:** `v1.7-minimal-network-service` — isolated U-mode
+  `net_driver_service` and `net_service`, bounded synthetic test-packet
+  IPC, deny-by-default network capabilities, shell-visible status and
+  counters, driver fault/restart containment, and network events in
+  axiomctl and Studio (docs/34, docs/35). This remains synthetic only: no
+  TCP/IP, sockets, internet, production networking, or real-hardware
+  networking claim. Earlier: `v1.6-storage-backed-loader`,
   `v1.5-user-space-driver-framework`, `v1.4-storage-service`,
   `v1.3-readonly-fs`, `v1.2-app-loader`, `v1.1-os-shell`,
   `v1.0.1-clean`, `v1.0-industrial-eval`.
-* **Next milestone:** `v1.7-minimal-network-service` (still no
-  writable storage, no arbitrary ELF, no real hardware).
+* **Next milestone:** `v1.8-robustness-fuzzing` (after the v1.7 QEMU and
+  Coq release gates pass).
 * **Next product direction:** real OS completion
   (`AxiomrtFull Completion Mode.md` — user-facing shell, application
   loading, filesystem/storage services, host tooling).
