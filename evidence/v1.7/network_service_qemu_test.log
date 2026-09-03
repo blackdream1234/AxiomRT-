@@ -1,45 +1,42 @@
 building os_boot kernel
-    Finished `release` profile [optimized] target(s) in 0.03s
+    Finished `release` profile [optimized] target(s) in 0.01s
 booting QEMU (scripted network-service session)
-MISSING: "axiom> "
-MISSING: "SERVICE started=net_driver_service"
-MISSING: "SERVICE started=net_service"
-MISSING: "NET_DRIVER started=net_driver_service"
-MISSING: "NET_SERVICE state=up mode=synthetic"
-MISSING: "OK net state=up driver=running tx=0 rx=0 mode=synthetic"
-MISSING: "OK tx=0 rx=0"
-MISSING: "OK sent test_packet bytes=64"
-MISSING: "NET_DRIVER tx_test bytes=64"
-MISSING: "NET_TX bytes=64 tx=1"
-MISSING: "NET_RX rx=1"
-MISSING: "OK rx_count=1"
-MISSING: "NET_DRIVER rx_count=1"
-MISSING: "NET_DENIED reason=malformed"
-MISSING: "ERR malformed"
-MISSING: "FAULT type=PageFault task=net_driver_service"
-MISSING: "CONTAIN scope=user reason=user_access_unmapped action=faulted kernel=alive"
-MISSING: "IPC delivered fault_event to=supervisor_task from=net_driver_service"
-MISSING: "DRIVER_MANAGER observed=fault driver=net_driver_service"
-MISSING: "NET_DRIVER state=faulted"
-MISSING: "OK network fault contained"
-MISSING: "ERR driver_down"
-MISSING: "TASK_RESTARTED task=net_driver_service"
-MISSING: "NET_DRIVER restarted=net_driver_service"
-MISSING: "OK restarted"
-MISSING: recovered network status after restart
-MISSING: "hello from app: hello"
-MISSING: "OK etc apps docs bin"
-MISSING: "OK block_size=48 blocks=8 readonly=true"
-MISSING: "driver name=block_driver_service state=running kind=block_skeleton"
-MISSING: "driver name=net_driver_service state=running kind=network_synthetic"
-MISSING: "OK loaded hello"
-MISSING: "caps task=shell_service endpoint console info control endpoint endpoint endpoint endpoint endpoint"
-MISSING: "SHUTDOWN controlled=true by=shell_service"
-MISSING: controlled poweroff (QEMU exit 127)
+ok: found "axiom> "
+ok: found "SERVICE started=net_driver_service"
+ok: found "SERVICE started=net_service"
+ok: found "NET_DRIVER started=net_driver_service"
+ok: found "NET_SERVICE state=up mode=synthetic"
+ok: found "OK net state=up driver=running tx=0 rx=0 mode=synthetic"
+ok: found "OK tx=0 rx=0"
+ok: found "OK sent test_packet bytes=64"
+ok: found "NET_DRIVER tx_test bytes=64"
+ok: found "NET_TX bytes=64 tx=1"
+ok: found "NET_RX rx=1"
+ok: found "OK rx_count=1"
+ok: found "NET_DRIVER rx_count=1"
+ok: found "NET_DENIED reason=malformed"
+ok: found "ERR malformed"
+ok: found "FAULT type=PageFault task=net_driver_service"
+ok: found "CONTAIN scope=user reason=user_access_unmapped action=faulted kernel=alive"
+ok: found "IPC delivered fault_event to=supervisor_task from=net_driver_service"
+ok: found "DRIVER_MANAGER observed=fault driver=net_driver_service"
+ok: found "NET_DRIVER state=faulted"
+ok: found "OK network fault contained"
+ok: found "ERR driver_down"
+ok: found "TASK_RESTARTED task=net_driver_service"
+ok: found "NET_DRIVER restarted=net_driver_service"
+ok: found "OK restarted"
+ok: network status recovered after restart
+ok: found "hello from app: hello"
+ok: found "OK etc apps docs bin"
+ok: found "OK block_size=48 blocks=8 readonly=true"
+ok: found "driver name=block_driver_service state=running kind=block_skeleton"
+ok: found "driver name=net_driver_service state=running kind=network_synthetic"
+ok: found "OK loaded hello"
+ok: found "caps task=shell_service endpoint console info control endpoint endpoint endpoint endpoint endpoint"
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
 ok: no kernel panic
 ok: net_service stayed alive
 restoring default build
-FAIL: network service test
-timeout: failed to run command ‘qemu-system-riscv64’: No such file or directory
-
-EXIT_CODE=1
+PASS: network service test

@@ -1,281 +1,315 @@
 
 === boot_smoke_test ===
     Finished `release` profile [optimized] target(s) in 0.00s
-FAIL: QEMU did not run correctly (exit 127). Log: /tmp/axiomrt_boot_smoke.SaWHqB.log
->>> FAILED: ./tests/boot_smoke_test.sh
+ok: found "AxiomRT kernel booted"
+ok: found "arch=riscv64"
+ok: found "phase=boot"
+PASS: boot smoke test
 
 === memory_isolation_qemu_test ===
-FAIL[read-kernel]: QEMU exit 127 (log: /tmp/axiomrt_memiso.vZ1Yhk.log)
-FAIL[write-unmapped]: QEMU exit 127 (log: /tmp/axiomrt_memiso.6OzKNF.log)
-FAIL[exec-nonexec]: QEMU exit 127 (log: /tmp/axiomrt_memiso.T9hwH4.log)
-FAIL: memory isolation QEMU tests
->>> FAILED: ./tests/memory_isolation_qemu_test.sh
+ok[read-kernel]: page fault contained, reason=user_access_kernel_memory, kernel survived
+ok[write-unmapped]: page fault contained, reason=user_access_unmapped, kernel survived
+ok[exec-nonexec]: page fault contained, reason=user_execute_nonexecutable, kernel survived
+PASS: memory isolation QEMU tests
 
 === two_task_qemu_test ===
-FAIL: QEMU exit 127 (log: /tmp/axiomrt_twotask.TQQDLe.log)
->>> FAILED: ./tests/two_task_qemu_test.sh
+ok: TASK_STARTED task=task_a
+ok: TASK_STARTED task=task_b
+ok: SCHED selected=task_b
+ok: SCHED selected=task_a
+ok: TASK_EXITED task=task_a
+ok: TASK_EXITED task=task_b
+ok: phase=multitask-demo-complete
+PASS: two-task dispatch test
 
 === timer_preemption_qemu_test ===
-FAIL: QEMU exit 127 (log: /tmp/axiomrt_timer.ylVC1P.log)
->>> FAILED: ./tests/timer_preemption_qemu_test.sh
+ok: TASK_STARTED task=low_loop
+ok: TASK_STARTED task=critical_task
+ok: TIMER tick=1
+ok: SCHED preempt=low_loop selected=critical_task
+ok: SYSCALL name=sys_yield task=critical_task
+ok: TASK_EXITED task=critical_task
+ok: no PANIC (kernel stayed alive under the infinite loop)
+PASS: timer preemption test
 
 === watchdog_qemu_test ===
-FAIL: QEMU exit 127 (log: /tmp/axiomrt_wdog.fAzRGL.log)
->>> FAILED: ./tests/watchdog_qemu_test.sh
+ok: TASK_STARTED task=faulty_task
+ok: TASK_STARTED task=critical_task
+ok: FAULT type=WatchdogTimeout task=faulty_task
+ok: CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive
+ok: SCHED selected=critical_task
+ok: no PANIC (kernel stayed alive; CPU exhaustion contained)
+PASS: watchdog test
 
 === ipc_rendezvous_qemu_test ===
-FAIL: QEMU exit 127 (log: /tmp/axiomrt_ipc.sZG30H.log)
->>> FAILED: ./tests/ipc_rendezvous_qemu_test.sh
+ok: TASK_STARTED task=receiver
+ok: TASK_STARTED task=sender
+ok: IPC recv task=receiver
+ok: state=blocked
+ok: IPC send task=sender
+ok: IPC delivered bytes=4
+ok: TASK_EXITED task=sender
+ok: TASK_EXITED task=receiver
+ok: no PANIC
+PASS: IPC rendezvous test
 
 === capability_qemu_test ===
-FAIL: QEMU exit 127 (log: /tmp/axiomrt_cap.cCAunD.log)
->>> FAILED: ./tests/capability_qemu_test.sh
+ok: TASK_STARTED task=faulty_task
+ok: CAP_DENIED task=faulty_task reason=no_valid_capability
+ok: IPC state=unchanged
+ok: IPC send task=good_sender
+ok: IPC delivered bytes=4
+ok: no PANIC
+PASS: capability enforcement test
 
 === supervisor_qemu_test ===
-FAIL: QEMU exit 127 (log: /tmp/axiomrt_sup.j1dkMI.log)
->>> FAILED: ./tests/supervisor_qemu_test.sh
+ok: TASK_STARTED task=supervisor_task
+ok: TASK_STARTED task=logger_task
+ok: FAULT type=WatchdogTimeout task=faulty_task
+ok: IPC delivered fault_event to=supervisor_task
+ok: LOGGER event=TASK_FAULTED task=faulty_task
+ok: RECOVERY_APPLIED policy=Kill
+ok: no PANIC
+PASS: supervisor test
 
 === full_fault_containment_demo_qemu_test ===
-FAIL: QEMU exit 127 (log: /tmp/axiomrt_full.m6irHb.log)
->>> FAILED: ./tests/full_fault_containment_demo_qemu_test.sh
+ok: TASK_STARTED task=critical_task
+ok: TASK_STARTED task=supervisor_task
+ok: TASK_STARTED task=logger_task
+ok: TASK_STARTED task=faulty_task
+ok: CAP_DENIED task=faulty_task reason=no_valid_capability
+ok: IPC state=unchanged
+ok: FAULT type=WatchdogTimeout task=faulty_task
+ok: IPC delivered fault_event to=supervisor_task
+ok: LOGGER event=TASK_FAULTED task=faulty_task
+ok: RECOVERY_APPLIED policy=Kill
+ok: critical_task continues (kept being scheduled)
+ok: no PANIC (kernel alive under attack)
+PASS: full fault-containment demo (DEMO result=pass)
 
 === os_shell_qemu_test ===
 building os_boot kernel
     Finished `release` profile [optimized] target(s) in 0.00s
 booting QEMU (scripted shell session)
-MISSING: "AxiomRT kernel booted"
-MISSING: "MMU status=enabled mode=sv39 scope=kernel"
-MISSING: "TASK_STARTED task=init_service"
-MISSING: "SERVICE started=supervisor_service"
-MISSING: "SERVICE started=logger_service"
-MISSING: "SERVICE started=console_service"
-MISSING: "SERVICE started=shell_service"
-MISSING: "axiom> "
-MISSING: "commands: help version tasks faults ipc caps memory uptime events"
-MISSING: "task idx=4 name=shell_service prio=3 state=running"
-MISSING: "uptime ticks="
-MISSING: "SERVICE started=faulty_task"
-MISSING: "CAP_DENIED task=faulty_task reason=no_valid_capability"
-MISSING: "FAULT type=WatchdogTimeout task=faulty_task"
-MISSING: "CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive"
-MISSING: "RECOVERY_APPLIED policy=Kill"
-MISSING: "SHUTDOWN controlled=true by=shell_service"
-MISSING: controlled poweroff (QEMU exit 127)
+ok: found "AxiomRT kernel booted"
+ok: found "MMU status=enabled mode=sv39 scope=kernel"
+ok: found "TASK_STARTED task=init_service"
+ok: found "SERVICE started=supervisor_service"
+ok: found "SERVICE started=logger_service"
+ok: found "SERVICE started=console_service"
+ok: found "SERVICE started=shell_service"
+ok: found "axiom> "
+ok: found "commands: help version tasks faults ipc caps memory uptime events"
+ok: found "task idx=4 name=shell_service prio=3 state=running"
+ok: found "uptime ticks="
+ok: found "SERVICE started=faulty_task"
+ok: found "CAP_DENIED task=faulty_task reason=no_valid_capability"
+ok: found "FAULT type=WatchdogTimeout task=faulty_task"
+ok: found "CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive"
+ok: found "RECOVERY_APPLIED policy=Kill"
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
 restoring default build
-FAIL: OS shell test
-timeout: failed to run command ‘qemu-system-riscv64’: No such file or directory
->>> FAILED: ./tests/os_shell_qemu_test.sh
+PASS: OS shell test
 
 === app_loader_qemu_test ===
 building os_boot kernel
-    Finished `release` profile [optimized] target(s) in 0.00s
+    Finished `release` profile [optimized] target(s) in 0.01s
 booting QEMU (scripted app session)
-MISSING: "SERVICE started=app_loader_service"
-MISSING: "axiom> "
-MISSING: "apps: hello fault_demo counter"
-MISSING: "hello: greeter prio=2 caps=console restart=rerun"
-MISSING: "SERVICE started=hello"
-MISSING: "hello from app: hello"
-MISSING: "TASK_EXITED task=hello"
-MISSING: "APP counter progress=1"
-MISSING: "APP counter progress=3"
-MISSING: "APP counter done"
-MISSING: "TASK_EXITED task=counter"
-MISSING: "SERVICE started=fault_demo"
-MISSING: "CAP_DENIED task=fault_demo"
-MISSING: "FAULT type=WatchdogTimeout task=fault_demo"
-MISSING: "CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive"
-MISSING: "RECOVERY_APPLIED policy=Kill"
-MISSING: "uptime ticks="
-MISSING: "SHUTDOWN controlled=true by=shell_service"
-MISSING: controlled poweroff (QEMU exit 127)
+ok: found "SERVICE started=app_loader_service"
+ok: found "axiom> "
+ok: found "apps: hello fault_demo counter"
+ok: found "hello: greeter prio=2 caps=console restart=rerun"
+ok: found "SERVICE started=hello"
+ok: found "hello from app: hello"
+ok: found "TASK_EXITED task=hello"
+ok: found "APP counter progress=1"
+ok: found "APP counter progress=3"
+ok: found "APP counter done"
+ok: found "TASK_EXITED task=counter"
+ok: found "SERVICE started=fault_demo"
+ok: found "CAP_DENIED task=fault_demo"
+ok: found "FAULT type=WatchdogTimeout task=fault_demo"
+ok: found "CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive"
+ok: found "RECOVERY_APPLIED policy=Kill"
+ok: found "uptime ticks="
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
 restoring default build
-FAIL: app loader test
-timeout: failed to run command ‘qemu-system-riscv64’: No such file or directory
->>> FAILED: ./tests/app_loader_qemu_test.sh
+PASS: app loader test
 
 === readonly_fs_qemu_test ===
 building os_boot kernel
     Finished `release` profile [optimized] target(s) in 0.00s
 booting QEMU (scripted fs session)
-MISSING: "SERVICE started=fs_service"
-MISSING: "axiom> "
-MISSING: "OK etc apps docs"
-MISSING: "OK version limitations"
-MISSING: "OK hello.manifest counter.manifest fault_demo.manifest"
-MISSING: "OK AxiomRT v1.6"
-MISSING: "OK hello: prio=2 caps=console restart=rerun"
-MISSING: "ERR not_found"
-MISSING: "uptime ticks="
-MISSING: "SHUTDOWN controlled=true by=shell_service"
-MISSING: controlled poweroff (QEMU exit 127)
+ok: found "SERVICE started=fs_service"
+ok: found "axiom> "
+ok: found "OK etc apps docs"
+ok: found "OK version limitations"
+ok: found "OK hello.manifest counter.manifest fault_demo.manifest"
+ok: found "OK AxiomRT v1.6"
+ok: found "OK hello: prio=2 caps=console restart=rerun"
+ok: found "ERR not_found"
+ok: found "uptime ticks="
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
 ok: no kernel panic during malformed requests
 restoring default build
-FAIL: read-only filesystem test
-timeout: failed to run command ‘qemu-system-riscv64’: No such file or directory
->>> FAILED: ./tests/readonly_fs_qemu_test.sh
+PASS: read-only filesystem test
 
 === storage_service_qemu_test ===
 building os_boot kernel
-    Finished `release` profile [optimized] target(s) in 0.01s
+    Finished `release` profile [optimized] target(s) in 0.00s
 booting QEMU (scripted storage session)
-MISSING: "SERVICE started=storage_service"
-MISSING: "axiom> "
-MISSING: "OK block_size=48 blocks=8 readonly=true"
-MISSING: "OK data=AXSTOR v1 blocks=8 bs=48 ro=1"
-MISSING: "ERR bad_block"
-MISSING: "ERR malformed"
-MISSING: "OK data=AxiomRT v1.6"
-MISSING: "caps task=shell_service endpoint console info control endpoint endpoint endpoint"
-MISSING: "hello from app: hello"
-MISSING: "SHUTDOWN controlled=true by=shell_service"
-MISSING: controlled poweroff (QEMU exit 127)
+ok: found "SERVICE started=storage_service"
+ok: found "axiom> "
+ok: found "OK block_size=48 blocks=8 readonly=true"
+ok: found "OK data=AXSTOR v1 blocks=8 bs=48 ro=1"
+ok: found "ERR bad_block"
+ok: found "ERR malformed"
+ok: found "OK data=AxiomRT v1.6"
+ok: found "caps task=shell_service endpoint console info control endpoint endpoint endpoint"
+ok: found "hello from app: hello"
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
 ok: no kernel panic
 restoring default build
-FAIL: storage service test
-timeout: failed to run command ‘qemu-system-riscv64’: No such file or directory
->>> FAILED: ./tests/storage_service_qemu_test.sh
+PASS: storage service test
 
 === driver_framework_qemu_test ===
 building os_boot kernel
     Finished `release` profile [optimized] target(s) in 0.00s
 booting QEMU (scripted driver session)
-MISSING: "axiom> "
-MISSING: "DEVICE registered=block0 kind=block_skeleton"
-MISSING: "IRQ registered source=block0 endpoint=driver_irq"
-MISSING: "MMIO grant task=block_driver_service device=block0 region=virtio_mmio0"
-MISSING: "DMA grant task=block_driver_service buffer=block0_dma size=4096"
-MISSING: "DRIVER started=block_driver_service"
-MISSING: "MMIO read task=block_driver_service device=block0 offset=0 value=0x74726976"
-MISSING: "MMIO_DENIED task=block_driver_service reason=insufficient_rights"
-MISSING: "IRQ delivered to=block_driver_service source=block0"
-MISSING: "driver name=block_driver_service state=running kind=block_skeleton"
-MISSING: "block_driver_service running"
-MISSING: "kind=block_skeleton state=running mmio=granted irq=registered"
-MISSING: "FAULT type=PageFault task=block_driver_service"
-MISSING: "CONTAIN scope=user reason=user_access_unmapped action=faulted kernel=alive"
-MISSING: "IPC delivered fault_event to=supervisor_task from=block_driver_service"
-MISSING: "IRQ_DROPPED reason=driver_not_ready"
-MISSING: "DRIVER_MANAGER observed=fault driver=block_driver_service"
-MISSING: "block_driver_service faulted"
-MISSING: "TASK_RESTARTED task=block_driver_service"
-MISSING: "DRIVER restarted=block_driver_service"
-MISSING: "caps task=shell_service endpoint console info control endpoint endpoint endpoint endpoint"
-MISSING: "hello from app: hello"
-MISSING: "MMIO_DENIED task=fault_demo reason=no_valid_capability"
-MISSING: "DMA_DENIED task=fault_demo reason=no_valid_capability"
-MISSING: "OK data=AxiomRT v1.6"
-MISSING: "SHUTDOWN controlled=true by=shell_service"
-MISSING: controlled poweroff (QEMU exit 127)
+ok: found "axiom> "
+ok: found "DEVICE registered=block0 kind=block_skeleton"
+ok: found "IRQ registered source=block0 endpoint=driver_irq"
+ok: found "MMIO grant task=block_driver_service device=block0 region=virtio_mmio0"
+ok: found "DMA grant task=block_driver_service buffer=block0_dma size=4096"
+ok: found "DRIVER started=block_driver_service"
+ok: found "MMIO read task=block_driver_service device=block0 offset=0 value=0x74726976"
+ok: found "MMIO_DENIED task=block_driver_service reason=insufficient_rights"
+ok: found "IRQ delivered to=block_driver_service source=block0"
+ok: found "driver name=block_driver_service state=running kind=block_skeleton"
+ok: found "block_driver_service running"
+ok: found "kind=block_skeleton state=running mmio=granted irq=registered"
+ok: found "FAULT type=PageFault task=block_driver_service"
+ok: found "CONTAIN scope=user reason=user_access_unmapped action=faulted kernel=alive"
+ok: found "IPC delivered fault_event to=supervisor_task from=block_driver_service"
+ok: found "IRQ_DROPPED reason=driver_not_ready"
+ok: found "DRIVER_MANAGER observed=fault driver=block_driver_service"
+ok: found "block_driver_service faulted"
+ok: found "TASK_RESTARTED task=block_driver_service"
+ok: found "DRIVER restarted=block_driver_service"
+ok: found "caps task=shell_service endpoint console info control endpoint endpoint endpoint endpoint"
+ok: found "hello from app: hello"
+ok: found "MMIO_DENIED task=fault_demo reason=no_valid_capability"
+ok: found "DMA_DENIED task=fault_demo reason=no_valid_capability"
+ok: found "OK data=AxiomRT v1.6"
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
 ok: no kernel panic
-MISSING: running state after fault
+ok: driver running again after fault
 restoring default build
-FAIL: driver framework test
-timeout: failed to run command ‘qemu-system-riscv64’: No such file or directory
->>> FAILED: ./tests/driver_framework_qemu_test.sh
+PASS: driver framework test
 
 === restricted_loader_qemu_test ===
 building os_boot kernel
     Finished `release` profile [optimized] target(s) in 0.00s
 booting QEMU (scripted loader session)
-MISSING: "axiom> "
-MISSING: "hello.app counter.app fault_demo.app invalid_bad_magic.app invalid_bad_cap.app invalid_bad_checksum.app"
-MISSING: "APP_IMAGE loaded=hello source=/bin/hello.app"
-MISSING: "OK loaded hello"
-MISSING: "OK running hello"
-MISSING: "hello from app: hello"
-MISSING: "TASK_EXITED task=hello"
-MISSING: "OK loaded counter"
-MISSING: "OK running counter"
-MISSING: "APP counter progress=1"
-MISSING: "APP counter progress=3"
-MISSING: "APP counter done"
-MISSING: "APP_IMAGE rejected=invalid_bad_magic reason=bad_image"
-MISSING: "ERR bad_image"
-MISSING: "APP_IMAGE rejected=invalid_bad_checksum reason=bad_checksum"
-MISSING: "ERR bad_checksum"
-MISSING: "APP_IMAGE rejected=invalid_bad_cap reason=denied_capability"
-MISSING: "ERR denied_capability"
-MISSING: "OK loaded fault_demo"
-MISSING: "CAP_DENIED task=fault_demo"
-MISSING: "FAULT type=WatchdogTimeout task=fault_demo"
-MISSING: "CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive"
-MISSING: "RECOVERY_APPLIED policy=Kill"
-MISSING: "hello from app: hello"
-MISSING: "OK etc apps docs bin"
-MISSING: "OK block_size=48 blocks=8 readonly=true"
-MISSING: "driver name=block_driver_service state=running kind=block_skeleton"
-MISSING: "SHUTDOWN controlled=true by=shell_service"
-MISSING: controlled poweroff (QEMU exit 127)
+ok: found "axiom> "
+ok: found "hello.app counter.app fault_demo.app invalid_bad_magic.app invalid_bad_cap.app invalid_bad_checksum.app"
+ok: found "APP_IMAGE loaded=hello source=/bin/hello.app"
+ok: found "OK loaded hello"
+ok: found "OK running hello"
+ok: found "hello from app: hello"
+ok: found "TASK_EXITED task=hello"
+ok: found "OK loaded counter"
+ok: found "OK running counter"
+ok: found "APP counter progress=1"
+ok: found "APP counter progress=3"
+ok: found "APP counter done"
+ok: found "APP_IMAGE rejected=invalid_bad_magic reason=bad_image"
+ok: found "ERR bad_image"
+ok: found "APP_IMAGE rejected=invalid_bad_checksum reason=bad_checksum"
+ok: found "ERR bad_checksum"
+ok: found "APP_IMAGE rejected=invalid_bad_cap reason=denied_capability"
+ok: found "ERR denied_capability"
+ok: found "OK loaded fault_demo"
+ok: found "CAP_DENIED task=fault_demo"
+ok: found "FAULT type=WatchdogTimeout task=fault_demo"
+ok: found "CONTAIN scope=user reason=watchdog_timeout action=faulted kernel=alive"
+ok: found "RECOVERY_APPLIED policy=Kill"
+ok: found "hello from app: hello"
+ok: found "OK etc apps docs bin"
+ok: found "OK block_size=48 blocks=8 readonly=true"
+ok: found "driver name=block_driver_service state=running kind=block_skeleton"
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
 ok: no kernel panic
 ok: app_loader stayed alive
 restoring default build
-FAIL: restricted loader test
-timeout: failed to run command ‘qemu-system-riscv64’: No such file or directory
->>> FAILED: ./tests/restricted_loader_qemu_test.sh
+PASS: restricted loader test
 
 === network_service_qemu_test ===
 building os_boot kernel
     Finished `release` profile [optimized] target(s) in 0.00s
 booting QEMU (scripted network-service session)
-MISSING: "axiom> "
-MISSING: "SERVICE started=net_driver_service"
-MISSING: "SERVICE started=net_service"
-MISSING: "NET_DRIVER started=net_driver_service"
-MISSING: "NET_SERVICE state=up mode=synthetic"
-MISSING: "OK net state=up driver=running tx=0 rx=0 mode=synthetic"
-MISSING: "OK tx=0 rx=0"
-MISSING: "OK sent test_packet bytes=64"
-MISSING: "NET_DRIVER tx_test bytes=64"
-MISSING: "NET_TX bytes=64 tx=1"
-MISSING: "NET_RX rx=1"
-MISSING: "OK rx_count=1"
-MISSING: "NET_DRIVER rx_count=1"
-MISSING: "NET_DENIED reason=malformed"
-MISSING: "ERR malformed"
-MISSING: "FAULT type=PageFault task=net_driver_service"
-MISSING: "CONTAIN scope=user reason=user_access_unmapped action=faulted kernel=alive"
-MISSING: "IPC delivered fault_event to=supervisor_task from=net_driver_service"
-MISSING: "DRIVER_MANAGER observed=fault driver=net_driver_service"
-MISSING: "NET_DRIVER state=faulted"
-MISSING: "OK network fault contained"
-MISSING: "ERR driver_down"
-MISSING: "TASK_RESTARTED task=net_driver_service"
-MISSING: "NET_DRIVER restarted=net_driver_service"
-MISSING: "OK restarted"
-MISSING: recovered network status after restart
-MISSING: "hello from app: hello"
-MISSING: "OK etc apps docs bin"
-MISSING: "OK block_size=48 blocks=8 readonly=true"
-MISSING: "driver name=block_driver_service state=running kind=block_skeleton"
-MISSING: "driver name=net_driver_service state=running kind=network_synthetic"
-MISSING: "OK loaded hello"
-MISSING: "caps task=shell_service endpoint console info control endpoint endpoint endpoint endpoint endpoint"
-MISSING: "SHUTDOWN controlled=true by=shell_service"
-MISSING: controlled poweroff (QEMU exit 127)
+ok: found "axiom> "
+ok: found "SERVICE started=net_driver_service"
+ok: found "SERVICE started=net_service"
+ok: found "NET_DRIVER started=net_driver_service"
+ok: found "NET_SERVICE state=up mode=synthetic"
+ok: found "OK net state=up driver=running tx=0 rx=0 mode=synthetic"
+ok: found "OK tx=0 rx=0"
+ok: found "OK sent test_packet bytes=64"
+ok: found "NET_DRIVER tx_test bytes=64"
+ok: found "NET_TX bytes=64 tx=1"
+ok: found "NET_RX rx=1"
+ok: found "OK rx_count=1"
+ok: found "NET_DRIVER rx_count=1"
+ok: found "NET_DENIED reason=malformed"
+ok: found "ERR malformed"
+ok: found "FAULT type=PageFault task=net_driver_service"
+ok: found "CONTAIN scope=user reason=user_access_unmapped action=faulted kernel=alive"
+ok: found "IPC delivered fault_event to=supervisor_task from=net_driver_service"
+ok: found "DRIVER_MANAGER observed=fault driver=net_driver_service"
+ok: found "NET_DRIVER state=faulted"
+ok: found "OK network fault contained"
+ok: found "ERR driver_down"
+ok: found "TASK_RESTARTED task=net_driver_service"
+ok: found "NET_DRIVER restarted=net_driver_service"
+ok: found "OK restarted"
+ok: network status recovered after restart
+ok: found "hello from app: hello"
+ok: found "OK etc apps docs bin"
+ok: found "OK block_size=48 blocks=8 readonly=true"
+ok: found "driver name=block_driver_service state=running kind=block_skeleton"
+ok: found "driver name=net_driver_service state=running kind=network_synthetic"
+ok: found "OK loaded hello"
+ok: found "caps task=shell_service endpoint console info control endpoint endpoint endpoint endpoint endpoint"
+ok: found "SHUTDOWN controlled=true by=shell_service"
+ok: QEMU exited 0 (controlled poweroff, not timeout)
 ok: no kernel panic
 ok: net_service stayed alive
 restoring default build
-FAIL: network service test
-timeout: failed to run command ‘qemu-system-riscv64’: No such file or directory
->>> FAILED: ./tests/network_service_qemu_test.sh
+PASS: network service test
 
 === kernel host tests ===
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
      Running unittests src/lib.rs (target/x86_64-unknown-linux-gnu/debug/deps/kernel-720d12a73e7ffebf)
 
 running 116 tests
-test caps::capability::tests::derivation_only_diminishes ... ok
-test caps::capability::tests::capability_carries_object_and_rights ... ok
-test caps::rights::tests::all_eight_rights_are_distinct ... ok
+test device::tests::derivation_never_amplifies_rights ... ok
 test caps::rights::tests::diminish_never_amplifies ... ok
+test caps::rights::tests::all_eight_rights_are_distinct ... ok
+test caps::capability::tests::capability_carries_object_and_rights ... ok
 test caps::rights::tests::contains_is_subset_test ... ok
 test device::tests::access_bounds_reject_misaligned_and_out_of_range ... ok
-test device::tests::all_eight_device_rights_are_distinct ... ok
-test device::tests::derivation_never_amplifies_rights ... ok
-test device::tests::device_capability_creation_carries_id_and_rights ... ok
 test device::tests::dma_access_is_confined_to_the_granted_buffer ... ok
+test device::tests::device_capability_creation_carries_id_and_rights ... ok
+test caps::capability::tests::derivation_only_diminishes ... ok
 test device::tests::insufficient_rights_are_rejected ... ok
+test device::tests::all_eight_device_rights_are_distinct ... ok
 test device::tests::irq_raise_policy_matches_documented_table ... ok
 test device::tests::mmio_access_requires_capability_then_bounds ... ok
 test device::tests::no_capability_means_no_access ... ok
@@ -326,14 +360,14 @@ test memory::pagetable::tests::misaligned_rejected ... ok
 test memory::pagetable::tests::unmap_returns_frame_to_allocated ... ok
 test memory::pagetable::tests::user_page_must_be_in_user_window ... ok
 test memory::pagetable::tests::wx_user_mapping_rejected ... ok
-test memory::paging::tests::arena_exhaustion_is_explicit ... ok
 test memory::pagetable::tests::table_capacity_is_bounded ... ok
+test memory::paging::tests::arena_exhaustion_is_explicit ... ok
 test memory::paging::tests::distinct_gigabyte_regions_get_separate_subtrees ... ok
 test memory::paging::tests::double_map_rejected ... ok
 test memory::paging::tests::identity_range_maps_every_page ... ok
 test memory::paging::tests::map_then_translate_round_trip ... ok
-test memory::sv39::tests::device_execute_rejected ... ok
 test memory::paging::tests::offset_within_page_preserved ... ok
+test memory::sv39::tests::device_execute_rejected ... ok
 test memory::paging::tests::translate_unmapped_is_none ... ok
 test memory::sv39::tests::kernel_rx_leaf_has_no_user_bit ... ok
 test memory::sv39::tests::misaligned_rejected ... ok
@@ -349,9 +383,9 @@ test monitor::event::tests::severity_is_derived ... ok
 test monitor::serial::tests::export_appends_newline_through_sink ... ok
 test monitor::serial::tests::optional_fields_appear_only_when_present ... ok
 test monitor::serial::tests::renders_mandatory_fields_in_stable_format ... ok
+test monitor::serial::tests::worst_case_line_fits_without_truncation ... ok
 test network::tests::driver_protocol_accepts_only_exact_commands ... ok
 test network::tests::error_replies_are_bounded_and_stable ... ok
-test monitor::serial::tests::worst_case_line_fits_without_truncation ... ok
 test network::tests::four_network_rights_are_distinct ... ok
 test network::tests::malformed_and_unknown_requests_fail_safely ... ok
 test network::tests::network_rights_are_deny_by_default_and_never_amplify ... ok
@@ -387,10 +421,10 @@ test result: ok. 116 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fi
      Running unittests src/main.rs (target/x86_64-unknown-linux-gnu/debug/deps/kernel-91bd75ea1e96586e)
 
 running 4 tests
-test user::image::tests::stack_geometry_validated ... ok
-test user::image::tests::stack_must_stay_in_user_window ... ok
 test user::image::tests::kernel_entry_rejected ... ok
+test user::image::tests::stack_geometry_validated ... ok
 test user::image::tests::valid_image_accepted ... ok
+test user::image::tests::stack_must_stay_in_user_window ... ok
 
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -399,9 +433,9 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 running 7 tests
 test insert_rules ... ok
 test lookup_valid_capability ... ok
-test reject_missing_capability ... ok
 test query_reveals_own_authority_only_as_metadata ... ok
 test reject_insufficient_rights ... ok
+test reject_missing_capability ... ok
 test reject_wrong_object_type ... ok
 test revoked_capability_fails_lookup ... ok
 
@@ -410,12 +444,12 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
      Running ../tests/ipc_capability_tests.rs (target/x86_64-unknown-linux-gnu/debug/deps/ipc_capability_tests-a4bfa92d795cc687)
 
 running 7 tests
-test ipc_with_capability_succeeds ... ok
 test capability_is_bound_to_its_endpoint ... ok
-test recv_requires_receive_right ... ok
-test send_requires_send_right ... ok
+test ipc_with_capability_succeeds ... ok
 test ipc_without_capability_fails ... ok
+test recv_requires_receive_right ... ok
 test revoked_capability_stops_ipc ... ok
+test send_requires_send_right ... ok
 test wrong_object_type_rejected ... ok
 
 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
@@ -424,11 +458,11 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 running 10 tests
 test bounded_message_size_enforced_before_copy ... ok
-test bounded_no_second_sender_queue ... ok
 test cancel_non_waiting_thread_is_noop ... ok
 test cancel_parked_sender_drops_message_undelivered ... ok
-test copy_semantics_no_shared_memory ... ok
+test bounded_no_second_sender_queue ... ok
 test deterministic_same_history_same_outcome ... ok
+test copy_semantics_no_shared_memory ... ok
 test receiver_first_rendezvous_delivers_to_waiting_receiver ... ok
 test recv_blocks_if_no_sender ... ok
 test send_blocks_if_no_receiver ... ok
@@ -441,10 +475,10 @@ test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 running 6 tests
 test equal_priority_uses_deterministic_fifo_rule ... ok
 test blocked_task_not_selected ... ok
-test faulted_task_not_selected ... ok
-test killed_task_not_selected ... ok
-test killed_task_not_selected_even_if_still_queued ... ok
 test highest_priority_task_selected ... ok
+test faulted_task_not_selected ... ok
+test killed_task_not_selected_even_if_still_queued ... ok
+test killed_task_not_selected ... ok
 
 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -460,23 +494,23 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
      Running unittests src/lib.rs (target/x86_64-unknown-linux-gnu/debug/deps/axiomctl-5c0a05b29b61b4dd)
 
 running 17 tests
-test events::tests::capability_denial ... ok
 test events::tests::driver_events_appear_in_summary ... ok
-test events::tests::foreign_lines_are_skipped_not_guessed ... ok
+test events::tests::driver_framework_lines_are_driver_category ... ok
+test events::tests::capability_denial ... ok
 test events::tests::evt_monitor_line_uses_type_as_kind ... ok
 test events::tests::boot_banner_and_bare_fields ... ok
+test events::tests::foreign_lines_are_skipped_not_guessed ... ok
 test events::tests::ipc_flags_and_fields ... ok
 test events::tests::json_is_lossless_and_escaped ... ok
-test events::tests::driver_framework_lines_are_driver_category ... ok
+test events::tests::loader_events_are_loader_category ... ok
 test events::tests::other_fault_stays_fault_category ... ok
 test events::tests::parse_log_sequences_and_counts_skips ... ok
-test events::tests::recovery_line ... ok
 test events::tests::network_events_parse_and_appear_in_summary ... ok
+test events::tests::recovery_line ... ok
 test events::tests::scheduler_line ... ok
 test events::tests::task_started_line ... ok
 test events::tests::watchdog_fault_is_watchdog_category ... ok
 test events::tests::summary_covers_gate_categories ... ok
-test events::tests::loader_events_are_loader_category ... ok
 
 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -494,16 +528,14 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 
 === supervisor host tests ===
-   Compiling kernel v0.1.0 (/home/mrblackdream/Projects/AxiomRT/kernel)
-   Compiling supervisor v0.1.0 (/home/mrblackdream/Projects/AxiomRT/userland/supervisor)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
      Running unittests src/lib.rs (userland/supervisor/target/x86_64-unknown-linux-gnu/debug/deps/supervisor-efe639b3b7ec2ab9)
 
 running 4 tests
 test tests::empty_channel_reports_nothing_pending ... ok
 test tests::fault_event_reaches_supervisor_and_yields_explicit_decision ... ok
-test tests::no_capability_means_no_fault_events ... ok
 test tests::policy_matches_documented_defaults ... ok
+test tests::no_capability_means_no_fault_events ... ok
 
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -515,30 +547,73 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 
 === studio host tests ===
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
      Running unittests src/main.rs (target/x86_64-unknown-linux-gnu/debug/deps/studio-8d903058cf2d0cd3)
 
 running 6 tests
-test tests::evidence_names_are_validated ... ok
-test tests::all_documented_pages_route ... ok
-test tests::query_params_and_tail ... ok
-test tests::request_line_parsing ... ok
 test tests::network_view_derives_state_counters_and_lifecycle ... ok
+test tests::query_params_and_tail ... ok
+test tests::all_documented_pages_route ... ok
+test tests::evidence_names_are_validated ... ok
+test tests::request_line_parsing ... ok
 test tests::task_states_derive_from_demo_events ... ok
 
 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 
 === coq models ===
-sh: line 2: coqc: command not found
->>> FAILED: sh -c cd proofs/coq && \
-    coqc MemoryIsolation.v && \
-    coqc CapabilityAccess.v && \
-    coqc SchedulerPriority.v
+File "./MemoryIsolation.v", line 24, characters 15-20:
+Warning: Loading Stdlib without prefix is deprecated.
+Use "From Stdlib Require Arith" or the deprecated "From Coq Require Arith"
+for compatibility with older Coq versions.
+[deprecated-missing-stdlib,deprecated-since-9.0,deprecated,default]
+File "./MemoryIsolation.v", line 24, characters 21-25:
+Warning: Loading Stdlib without prefix is deprecated.
+Use "From Stdlib Require List" or the deprecated "From Coq Require List"
+for compatibility with older Coq versions.
+[deprecated-missing-stdlib,deprecated-since-9.0,deprecated,default]
+File "./MemoryIsolation.v", line 24, characters 26-30:
+Warning: Loading Stdlib without prefix is deprecated.
+Use "From Stdlib Require Bool" or the deprecated "From Coq Require Bool"
+for compatibility with older Coq versions.
+[deprecated-missing-stdlib,deprecated-since-9.0,deprecated,default]
+File "./CapabilityAccess.v", line 23, characters 15-20:
+Warning: Loading Stdlib without prefix is deprecated.
+Use "From Stdlib Require Arith" or the deprecated "From Coq Require Arith"
+for compatibility with older Coq versions.
+[deprecated-missing-stdlib,deprecated-since-9.0,deprecated,default]
+File "./CapabilityAccess.v", line 23, characters 21-25:
+Warning: Loading Stdlib without prefix is deprecated.
+Use "From Stdlib Require List" or the deprecated "From Coq Require List"
+for compatibility with older Coq versions.
+[deprecated-missing-stdlib,deprecated-since-9.0,deprecated,default]
+File "./CapabilityAccess.v", line 23, characters 26-30:
+Warning: Loading Stdlib without prefix is deprecated.
+Use "From Stdlib Require Bool" or the deprecated "From Coq Require Bool"
+for compatibility with older Coq versions.
+[deprecated-missing-stdlib,deprecated-since-9.0,deprecated,default]
+File "./SchedulerPriority.v", line 24, characters 15-20:
+Warning: Loading Stdlib without prefix is deprecated.
+Use "From Stdlib Require Arith" or the deprecated "From Coq Require Arith"
+for compatibility with older Coq versions.
+[deprecated-missing-stdlib,deprecated-since-9.0,deprecated,default]
+File "./SchedulerPriority.v", line 24, characters 21-25:
+Warning: Loading Stdlib without prefix is deprecated.
+Use "From Stdlib Require List" or the deprecated "From Coq Require List"
+for compatibility with older Coq versions.
+[deprecated-missing-stdlib,deprecated-since-9.0,deprecated,default]
+File "./SchedulerPriority.v", line 24, characters 26-30:
+Warning: Loading Stdlib without prefix is deprecated.
+Use "From Stdlib Require Bool" or the deprecated "From Coq Require Bool"
+for compatibility with older Coq versions.
+[deprecated-missing-stdlib,deprecated-since-9.0,deprecated,default]
+File "./SchedulerPriority.v", line 24, characters 31-34:
+Warning: Loading Stdlib without prefix is deprecated.
+Use "From Stdlib Require Lia" or the deprecated "From Coq Require Lia"
+for compatibility with older Coq versions.
+[deprecated-missing-stdlib,deprecated-since-9.0,deprecated,default]
 
 =========================
 
-0/16 QEMU tests
-VERIFY ALL: FAIL
-
-EXIT_CODE=1
+16/16 QEMU tests
+VERIFY ALL: PASS
