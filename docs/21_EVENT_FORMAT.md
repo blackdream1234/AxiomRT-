@@ -47,6 +47,7 @@ KIND [flag ...] [key=value ...]
 | `MMU`, `AxiomRT kernel booted`, bare `key=value` boot lines | boot | `MMU status=enabled mode=sv39 scope=kernel` |
 | `DEVICE` `DEVICE_DENIED` `MMIO` `MMIO_DENIED` `DMA` `DMA_DENIED` `IRQ` `IRQ_DENIED` `IRQ_DROPPED` `DRIVER` `DRIVER_MANAGER` | driver | `MMIO grant task=block_driver_service device=block0 region=virtio_mmio0` (v1.5, docs/31) |
 | `APP_IMAGE` | loader | `APP_IMAGE loaded=hello source=/bin/hello.app` / `APP_IMAGE rejected=invalid_bad_magic reason=bad_image` (v1.6, docs/32) |
+| `NET_DRIVER` `NET_SERVICE` `NET_TX` `NET_RX` `NET_DENIED` | network | `NET_SERVICE state=up mode=synthetic` / `NET_TX bytes=64 tx=1` (v1.7, docs/34) |
 
 Lines whose first token is not in this vocabulary (OpenSBI banner,
 cargo output, blank lines) are **skipped and counted**, never guessed

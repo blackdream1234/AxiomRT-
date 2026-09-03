@@ -62,8 +62,8 @@ authoritative scripts + cargo   (run_qemu flags, verify_all.sh,
 
 Every page path serves the same dashboard shell; the path selects the
 active panel: `/`, `/run`, `/tasks`, `/scheduler`, `/faults`, `/ipc`,
-`/capabilities`, `/drivers`, `/loader`, `/tests`, `/proofs`,
-`/evidence`, `/limitations`, `/release`.
+`/capabilities`, `/drivers`, `/network`, `/loader`, `/tests`,
+`/proofs`, `/evidence`, `/limitations`, `/release`.
 
 API (JSON unless noted):
 
@@ -73,7 +73,7 @@ API (JSON unless noted):
 | `/api/run_demo` | POST | start full-demo run (rejected while busy) |
 | `/api/run_verify` | POST | start `verify_all.sh` sweep |
 | `/api/kit_build` | POST | run `build_eval_kit.sh` |
-| `/api/events` | GET | parsed events of the last demo run (docs/21 NDJSON schema, JSON array) |
+| `/api/events` | GET | parsed events plus derived network state, TX/RX counters, mode, contained-fault/restart counts, and last network event |
 | `/api/log` | GET (text) | raw serial log of the last demo run |
 | `/api/verify_log` | GET (text) | output of the last verify run, else the archived clean log |
 | `/api/evidence` | GET | versions and files under `evidence/` |
@@ -95,7 +95,9 @@ API (JSON unless noted):
 8. Capabilities — CAP_DENIED table.
 8b. Drivers — driver-framework events (docs/31): device registration,
    MMIO/DMA grants and denials, IRQ delivery/drops, driver lifecycle.
-8c. Loader — restricted app loader events (docs/32): APP_IMAGE loads
+8c. Network — `NET_*` state, synthetic TX/RX counters, fault/restart
+   events, and explicit no-TCP/IP/socket/internet/production limitations.
+8d. Loader — restricted app loader events (docs/32): APP_IMAGE loads
    and rejections from the last run.
 9. Tests — sections and PASS/FAIL from the verify log.
 10. Proofs — Coq section of the verify log + refinement-TODO notice.
@@ -116,7 +118,8 @@ API (JSON unless noted):
 
 * `cargo build --target x86_64-unknown-linux-gnu -p studio` warning-free.
 * Unit tests: request-line routing, evidence-name validation, task
-  state derivation from events.
+  state derivation from events, and network state/counter/lifecycle
+  derivation.
 * Gate (roadmap §12): open Studio, click "Run Full Demo", watch the
   behavior visually — exercised manually via curl-driven checks of
   every endpoint in the phase evidence.

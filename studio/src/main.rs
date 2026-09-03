@@ -198,6 +198,7 @@ fn page_route(path: &str) -> bool {
             | "/ipc"
             | "/capabilities"
             | "/drivers"
+            | "/network"
             | "/loader"
             | "/tests"
             | "/proofs"
@@ -430,6 +431,83 @@ fn set_state(tasks: &mut [(String, String)], name: &str, state: &str) {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct NetworkView {
+    state: String,
+    tx: u64,
+    rx: u64,
+    mode: String,
+    faults: usize,
+    restarts: usize,
+    last_event: String,
+}
+
+impl Default for NetworkView {
+    fn default() -> Self {
+        Self {
+            state: "not_observed".to_string(),
+            tx: 0,
+            rx: 0,
+            mode: "not_observed".to_string(),
+            faults: 0,
+            restarts: 0,
+            last_event: "no network event in this log".to_string(),
+        }
+    }
+}
+
+fn event_field<'a>(ev: &'a Event, key: &str) -> Option<&'a str> {
+    ev.fields
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.as_str())
+}
+
+/// Derive the latest bounded synthetic-network view from structured
+/// events. Restart resets counters because both U-mode tasks re-enter
+/// with zeroed service/driver state (docs/34 section 8).
+fn derive_network(evs: &[Event]) -> NetworkView {
+    let mut view = NetworkView::default();
+    for ev in evs.iter().filter(|ev| ev.category == Category::Network) {
+        view.last_event = ev.raw.clone();
+        match ev.kind.as_str() {
+            "NET_SERVICE" => {
+                if let Some(state) = event_field(ev, "state") {
+                    view.state = state.to_string();
+                }
+                if let Some(mode) = event_field(ev, "mode") {
+                    view.mode = mode.to_string();
+                }
+            }
+            "NET_DRIVER" => {
+                if event_field(ev, "state") == Some("faulted") {
+                    view.state = "faulted".to_string();
+                    view.faults += 1;
+                } else if event_field(ev, "restarted").is_some() {
+                    view.state = "up".to_string();
+                    view.tx = 0;
+                    view.rx = 0;
+                    view.restarts += 1;
+                } else if event_field(ev, "started").is_some() {
+                    view.state = "up".to_string();
+                }
+            }
+            "NET_TX" => {
+                view.tx = event_field(ev, "tx")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(view.tx);
+            }
+            "NET_RX" => {
+                view.rx = event_field(ev, "rx")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(view.rx);
+            }
+            _ => {}
+        }
+    }
+    view
+}
+
 fn api_events(stream: &mut TcpStream, state: &Shared) -> std::io::Result<()> {
     const EVENT_CAP: usize = 1500;
     let log_text = state.lock().unwrap().demo.log.clone();
@@ -478,16 +556,26 @@ fn api_events(stream: &mut TcpStream, state: &Shared) -> std::io::Result<()> {
         .map(events::to_json)
         .collect::<Vec<_>>()
         .join(",");
+    let network = derive_network(&parsed.events);
 
     let body = format!(
         "{{\"total\":{},\"skipped\":{},\"shown\":{},\"summary\":[{}],\
-         \"sched\":[{}],\"tasks\":[{}],\"events\":[{}]}}",
+         \"sched\":[{}],\"tasks\":[{}],\"network\":{{\"state\":\"{}\",\
+         \"tx\":{},\"rx\":{},\"mode\":\"{}\",\"faults\":{},\"restarts\":{},\
+         \"last_event\":\"{}\"}},\"events\":[{}]}}",
         parsed.events.len(),
         parsed.skipped,
         parsed.events.len().min(EVENT_CAP),
         summary,
         sched_json,
         tasks_json,
+        json_escape(&network.state),
+        network.tx,
+        network.rx,
+        json_escape(&network.mode),
+        network.faults,
+        network.restarts,
+        json_escape(&network.last_event),
         events_json
     );
     respond(stream, 200, "application/json", &body)
@@ -632,6 +720,9 @@ mod tests {
             "/faults",
             "/ipc",
             "/capabilities",
+            "/drivers",
+            "/network",
+            "/loader",
             "/tests",
             "/proofs",
             "/evidence",
@@ -672,6 +763,29 @@ mod tests {
                 ("critical_task".to_string(), "running".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn network_view_derives_state_counters_and_lifecycle() {
+        let log = events::parse_log(
+            "NET_DRIVER started=net_driver_service\n\
+             NET_SERVICE state=up mode=synthetic\n\
+             NET_TX bytes=64 tx=2\n\
+             NET_RX rx=2\n\
+             NET_DENIED reason=malformed\n\
+             NET_DRIVER state=faulted\n\
+             NET_DRIVER restarted=net_driver_service\n\
+             NET_TX bytes=64 tx=1\n\
+             NET_RX rx=1\n",
+        );
+        let network = derive_network(&log.events);
+        assert_eq!(network.state, "up");
+        assert_eq!(network.mode, "synthetic");
+        assert_eq!(network.tx, 1);
+        assert_eq!(network.rx, 1);
+        assert_eq!(network.faults, 1);
+        assert_eq!(network.restarts, 1);
+        assert_eq!(network.last_event, "NET_RX rx=1");
     }
 
     #[test]

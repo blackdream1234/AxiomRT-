@@ -22,6 +22,9 @@ pub enum Category {
     /// Driver framework events (docs/31): device registration, MMIO/
     /// DMA grants and denials, IRQ delivery/drops, driver lifecycle.
     Driver,
+    /// Minimal network service/driver events (docs/34): state, bounded
+    /// synthetic TX/RX counters, denials, and lifecycle.
+    Network,
     /// Restricted app loader events (docs/32): image load / rejection.
     Loader,
 }
@@ -41,6 +44,7 @@ impl Category {
             Category::Service => "service",
             Category::Boot => "boot",
             Category::Driver => "driver",
+            Category::Network => "network",
             Category::Loader => "loader",
         }
     }
@@ -91,6 +95,8 @@ fn categorize(kind: &str, fields: &[(String, String)]) -> Option<Category> {
         // Driver framework vocabulary (docs/31 §7-§9).
         "DEVICE" | "DEVICE_DENIED" | "MMIO" | "MMIO_DENIED" | "DMA" | "DMA_DENIED" | "IRQ"
         | "IRQ_DENIED" | "IRQ_DROPPED" | "DRIVER" | "DRIVER_MANAGER" => Category::Driver,
+        // Minimal network-service vocabulary (docs/34 section 6).
+        "NET_DRIVER" | "NET_SERVICE" | "NET_TX" | "NET_RX" | "NET_DENIED" => Category::Network,
         // Restricted loader vocabulary (docs/32 §6).
         "APP_IMAGE" => Category::Loader,
         _ => return None,
@@ -232,7 +238,7 @@ pub fn to_json(ev: &Event) -> String {
 
 /// Human-readable per-category / per-kind counts (docs/21 §3).
 pub fn summary(log: &ParsedLog) -> String {
-    const ORDER: [Category; 13] = [
+    const ORDER: [Category; 14] = [
         Category::Task,
         Category::Scheduler,
         Category::Syscall,
@@ -246,6 +252,7 @@ pub fn summary(log: &ParsedLog) -> String {
         Category::Boot,
         Category::Driver,
         Category::Loader,
+        Category::Network,
     ];
 
     let mut out = format!(
@@ -418,6 +425,50 @@ mod tests {
     }
 
     #[test]
+    fn network_events_parse_and_appear_in_summary() {
+        let text = "NET_DRIVER started=net_driver_service\n\
+                    NET_SERVICE state=up mode=synthetic\n\
+                    NET_TX bytes=64 tx=1\n\
+                    NET_RX rx=1\n\
+                    NET_DENIED reason=malformed\n\
+                    NET_DRIVER state=faulted\n\
+                    NET_DRIVER restarted=net_driver_service\n\
+                    DRIVER_MANAGER observed=fault driver=net_driver_service\n";
+        let log = parse_log(text);
+        assert_eq!(log.events.len(), 8);
+        for ev in &log.events[..7] {
+            assert_eq!(ev.category, Category::Network, "category of: {}", ev.raw);
+        }
+        assert_eq!(log.events[7].category, Category::Driver);
+        assert_eq!(field(&log.events[1], "state"), Some("up"));
+        assert_eq!(field(&log.events[1], "mode"), Some("synthetic"));
+        assert_eq!(field(&log.events[2], "tx"), Some("1"));
+        assert_eq!(field(&log.events[3], "rx"), Some("1"));
+        assert_eq!(field(&log.events[4], "reason"), Some("malformed"));
+        assert_eq!(field(&log.events[5], "state"), Some("faulted"));
+        assert_eq!(
+            field(&log.events[6], "restarted"),
+            Some("net_driver_service")
+        );
+        assert_eq!(field(&log.events[7], "driver"), Some("net_driver_service"));
+
+        let s = summary(&log);
+        assert!(
+            s.contains("network"),
+            "summary missing network category:\n{s}"
+        );
+        for kind in [
+            "NET_DRIVER",
+            "NET_SERVICE",
+            "NET_TX",
+            "NET_RX",
+            "NET_DENIED",
+        ] {
+            assert!(s.contains(kind), "summary missing {kind}:\n{s}");
+        }
+    }
+
+    #[test]
     fn driver_events_appear_in_summary() {
         let log = parse_log(
             "DEVICE registered=block0 kind=block_skeleton\n\
@@ -439,6 +490,7 @@ mod tests {
         assert!(parse_line("OpenSBI v1.8").is_none());
         assert!(parse_line("").is_none());
         assert!(parse_line("   Compiling kernel v0.1.0").is_none());
+        assert!(parse_line("NET_UNKNOWN state=up").is_none());
     }
 
     #[test]

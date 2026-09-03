@@ -94,6 +94,7 @@
   <a href="/ipc" data-p="ipc">IPC</a>
   <a href="/capabilities" data-p="capabilities">Capabilities</a>
   <a href="/drivers" data-p="drivers">Drivers</a>
+  <a href="/network" data-p="network">Network</a>
   <a href="/loader" data-p="loader">Loader</a>
   <a href="/tests" data-p="tests">Tests</a>
   <a href="/proofs" data-p="proofs">Proofs</a>
@@ -170,6 +171,24 @@
   <div class="card"><table id="drivers"><thead><tr><th>#</th><th>detail</th></tr></thead><tbody></tbody></table></div>
 </section>
 
+<section data-p="network">
+  <h2>Minimal network service</h2>
+  <p class="sub">Derived NET_* events for the isolated U-mode service/driver path (docs/34).</p>
+  <div class="card"><div class="kv">
+    <span class="k">Network state</span><span id="net-state">not observed</span>
+    <span class="k">TX test packets</span><span id="net-tx">0</span>
+    <span class="k">RX test packets</span><span id="net-rx">0</span>
+    <span class="k">Mode</span><span id="net-mode">not observed</span>
+    <span class="k">Contained faults</span><span id="net-faults">0</span>
+    <span class="k">Restarts</span><span id="net-restarts">0</span>
+    <span class="k">Last network event</span><span id="net-last">none</span>
+  </div></div>
+  <div class="card">
+    <p class="note"><strong>Limitations:</strong> v1.7 is a deterministic synthetic 64-byte packet/counter service. It is not real virtio-net or hardware networking and provides no TCP/IP, sockets, DNS, internet, production-network, or certification claim.</p>
+  </div>
+  <div class="card"><table id="network-events"><thead><tr><th>#</th><th>detail</th></tr></thead><tbody></tbody></table></div>
+</section>
+
 <section data-p="loader">
   <h2>Restricted app loader</h2>
   <p class="sub">Storage-backed app image loads and rejections (docs/32): APP_IMAGE loaded / rejected events from the last run.</p>
@@ -178,7 +197,7 @@
 
 <section data-p="tests">
   <h2>Test results</h2>
-  <p class="sub">Full sweep: 9 QEMU serial-assertion tests, host suites, Coq models (scripts/verify_all.sh).</p>
+  <p class="sub">Full sweep: 16 QEMU serial-assertion tests, host suites, Coq models (scripts/verify_all.sh).</p>
   <div class="card">
     <button id="btn-verify">Run verification sweep</button>
     <span id="st-verify2" style="margin-left:10px"><span class="chip">idle</span></span>
@@ -230,6 +249,7 @@ const esc = (t) => t.replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt
 const path = location.pathname;
 const panel = {"/":"home","/run":"run","/tasks":"tasks","/scheduler":"scheduler",
   "/faults":"faults","/ipc":"ipc","/capabilities":"capabilities","/tests":"tests",
+  "/drivers":"drivers","/network":"network","/loader":"loader",
   "/proofs":"proofs","/evidence":"evidence","/limitations":"limitations",
   "/release":"release"}[path] || "home";
 document.querySelectorAll("section").forEach(s =>
@@ -298,6 +318,14 @@ async function loadEvents() {
   rows("#ipc", evRows(["ipc"], 2));
   rows("#caps", evRows(["capability"], 2));
   rows("#drivers", evRows(["driver"], 2));
+  $("#net-state").textContent = d.network.state;
+  $("#net-tx").textContent = d.network.tx.toLocaleString();
+  $("#net-rx").textContent = d.network.rx.toLocaleString();
+  $("#net-mode").textContent = d.network.mode;
+  $("#net-faults").textContent = d.network.faults.toLocaleString();
+  $("#net-restarts").textContent = d.network.restarts.toLocaleString();
+  $("#net-last").textContent = d.network.last_event;
+  rows("#network-events", evRows(["network"], 2));
   rows("#loader", evRows(["loader"], 2));
 }
 function detail(e) {
@@ -345,7 +373,7 @@ poll();
 loadVerifyLog();
 loadEvidence();
 loadDoc();
-if (panel === "run") { loadDemoLog(); loadEvents(); }
+if (panel === "run" || panel === "network") { loadDemoLog(); loadEvents(); }
 </script>
 </body>
 </html>
