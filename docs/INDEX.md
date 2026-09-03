@@ -31,6 +31,7 @@
 | [DEMO_SCENARIO.md](DEMO_SCENARIO.md) | Phase 13 | Fault containment demo scenario |
 | [34_NETWORK_SERVICE.md](34_NETWORK_SERVICE.md) | v1.7 | Minimal user-space network architecture and bounded protocol |
 | [35_VIRTIO_NET_INVESTIGATION.md](35_VIRTIO_NET_INVESTIGATION.md) | v1.7 | QEMU/virtio-net transport investigation and synthetic-path decision |
+| [36_ROBUSTNESS_AND_FUZZING.md](36_ROBUSTNESS_AND_FUZZING.md) | v1.8 | Threat surfaces, failure classes, bounds, containment rules, and fuzz coverage plan |
 
 File names above follow the task pack verbatim (numbering overlaps are
 intentional and preserved).
