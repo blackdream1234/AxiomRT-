@@ -1,6 +1,7 @@
 //! axiom-fuzz command-line entry point.
 
 use axiom_fuzz::limits::{MAX_INPUT_LEN, MAX_ITERATIONS};
+use axiom_fuzz::targets::ipc::{self, IpcTarget};
 use axiom_fuzz::targets::smoke::{self, SmokeTarget};
 use axiom_fuzz::{Corpus, Engine, FailureArtifact, RunConfig};
 use std::env;
@@ -13,7 +14,7 @@ axiom-fuzz — deterministic bounded AxiomRT fuzz harness
 
 RUN:
     cargo run -p axiom-fuzz --target x86_64-unknown-linux-gnu -- \\
-        --fuzz-target smoke --seed <u64> --iterations <u64> --max-len <usize> \\
+        --fuzz-target <smoke|ipc> --seed <u64> --iterations <u64> --max-len <usize> \\
         [--corpus <directory>] [--failure-dir <directory>]
 
 REPLAY:
@@ -23,8 +24,7 @@ REPLAY:
 RULES:
     --seed is required; no random or clock-derived default is used.
     max_len must be <= 1048576; iterations must be <= 10000000.
-    Only the infrastructure-validation target 'smoke' exists in
-    AXIOM-ROBUST-002.
+    Available targets: smoke, ipc.
 ";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -68,12 +68,11 @@ fn execute(arguments: Vec<String>) -> io::Result<u8> {
             corpus,
             failure_dir,
         } => {
-            if fuzz_target != smoke::NAME {
+            if !matches!(fuzz_target.as_str(), smoke::NAME | ipc::NAME) {
                 return Err(invalid_input(format!(
-                    "unknown fuzz target {fuzz_target:?}; available target: smoke"
+                    "unknown fuzz target {fuzz_target:?}; available targets: smoke, ipc"
                 )));
             }
-            smoke::validate_infrastructure().map_err(invalid_input)?;
             let corpus = match corpus {
                 Some(path) => Corpus::load(&path, max_len)?,
                 None => Corpus::empty(),
@@ -85,19 +84,29 @@ fn execute(arguments: Vec<String>) -> io::Result<u8> {
                 max_len,
                 failure_dir,
             };
-            let summary = Engine.run(&config, corpus, &mut SmokeTarget)?;
+            let summary = match config.target.as_str() {
+                smoke::NAME => {
+                    smoke::validate_infrastructure().map_err(invalid_input)?;
+                    Engine.run(&config, corpus, &mut SmokeTarget)?
+                }
+                ipc::NAME => Engine.run(&config, corpus, &mut IpcTarget)?,
+                _ => unreachable!("target validated above"),
+            };
             print!("{}", summary.render());
             Ok(summary.exit_code())
         }
         Command::Replay { failure_file } => {
             let artifact = FailureArtifact::read(&failure_file)?;
-            if artifact.target != smoke::NAME {
-                return Err(invalid_input(format!(
-                    "no implementation is registered for replay target {:?}",
-                    artifact.target
-                )));
-            }
-            let summary = Engine.replay(&artifact, &mut SmokeTarget)?;
+            let summary = match artifact.target.as_str() {
+                smoke::NAME => Engine.replay(&artifact, &mut SmokeTarget)?,
+                ipc::NAME => Engine.replay(&artifact, &mut IpcTarget)?,
+                _ => {
+                    return Err(invalid_input(format!(
+                        "no implementation is registered for replay target {:?}",
+                        artifact.target
+                    )))
+                }
+            };
             println!(
                 "REPLAY target={} seed={} iteration={} input_len={}",
                 artifact.target,

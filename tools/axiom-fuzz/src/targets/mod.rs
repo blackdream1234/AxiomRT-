@@ -1,3 +1,4 @@
-//! Fuzz targets. AXIOM-ROBUST-002 intentionally provides only smoke.
+//! Deterministic host fuzz targets.
 
+pub mod ipc;
 pub mod smoke;

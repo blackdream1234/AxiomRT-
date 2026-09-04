@@ -1,5 +1,5 @@
 # axiom-fuzz — deterministic host fuzz infrastructure (AXIOM-ROBUST-002).
-# Host-side tool; std only and zero external dependencies.
+# Host-side tool; std only, using the local kernel model as source of truth.
 
 [package]
 name = "axiom-fuzz"
@@ -7,3 +7,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+kernel = { path = "../../kernel" }

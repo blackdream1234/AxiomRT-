@@ -150,9 +150,58 @@ A plan is not a claim that the case already passes.
   panic the kernel.
 * **Coverage:** current IPC/capability host suites cover copy semantics,
   blocking, cancellation, rights, deterministic histories, and the
-  one-sender bound; QEMU covers cross-AS delivery. AXIOM-ROBUST-003 adds
-  boundary-length mutation, repeated no-peer operations, stale state,
-  revoked/wrong capabilities, and hostile pointers.
+  one-sender bound; QEMU covers valid cross-AS delivery. AXIOM-ROBUST-003
+  implements deterministic host fuzzing for bounded payload, rendezvous,
+  cancellation, capability, and task-state behavior. Hostile user pointers
+  remain explicitly deferred to AXIOM-ROBUST-013.
+
+#### 5.3.1 Implemented host coverage (AXIOM-ROBUST-003)
+
+The `axiom-fuzz` `ipc` target calls the real public host model rather than
+a duplicate protocol implementation:
+
+* `kernel::ipc::MSG_MAX_BYTES` is imported directly as the 128-byte source
+  of truth. The target exercises 0, 1, maximum-minus-one, maximum,
+  maximum-plus-one, and a bounded 512-byte requested length.
+* `Message::new`, `send_checked`, `recv_checked`, and `cancel` supply
+  the actual copy, capability, endpoint-binding, rendezvous, and cancellation
+  behavior. Source bytes are mutated after message construction and delivered
+  bytes must remain exact.
+* `Endpoint` supplies the actual Idle, SenderWaiting, and ReceiverWaiting
+  state machine. A second sender or receiver must return Busy/AlreadyWaiting;
+  no operation queue is modeled or added.
+* Three per-task `CapTable` instances exercise valid Send/Receive, missing,
+  revoked, wrong-endpoint, wrong-object-type, and insufficient-right cases.
+  The fuzz adapter uses slot 0 only. The generic host table has 32 slots while
+  the current runtime table has 9; AXIOM-ROBUST-003 makes no capacity claim
+  across that known representation difference.
+* Real `Thread` transition rules provide Ready, Running, Blocked, Faulted,
+  and Killed checks. The adapter applies explicit send/receive outcomes to
+  these threads and verifies cancellation removes the single blocked state.
+  The host Endpoint API itself does not own scheduler state.
+
+Each case contains at most 16 operations. A fixed 20-scenario boundary bank
+guarantees sender-first, receiver-first, repeated send/receive, both
+cancellation directions, cancellation after delivery, capability denials,
+terminal tasks, exact maximum copies, and oversized rejection. Remaining
+input bytes decode deterministically into Send, Receive, Cancel, RevokeCap,
+RestoreCap, wrong endpoint/type/rights, fault, kill, and make-ready
+operations. The target replays every decoded sequence from a fresh state and
+requires the same counters and final snapshot (IPC-INV-012).
+
+Normal validation failures are `SAFE_REJECT`. Busy/AlreadyWaiting outcomes
+are `BOUNDED_RESOURCE_EXHAUSTION` because they expose the documented
+one-party endpoint capacity. Any IPC-INV-001 through IPC-INV-013 violation is
+`KERNEL_INVARIANT_FAILURE` and therefore uses the common deterministic
+artifact and exact-byte replay path. No `CONTAINED_USER_FAULT` is assigned
+to ordinary validation errors.
+
+This is host-model evidence. The target does not execute a RISC-V trap frame,
+SATP/address-space switch, SUM-mediated copy, or the private runtime
+`valid_user_buf`/`in_readable_window` validators. The existing IPC QEMU
+test remains the evidence for one valid cross-address-space rendezvous; it
+does not prove malformed-pointer safety. Null, kernel, unmapped, overflowing,
+and cross-page pointer cases remain deferred to AXIOM-ROBUST-013.
 
 ### 5.4 Capability slots, objects, and rights
 
