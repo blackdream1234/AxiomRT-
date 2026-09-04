@@ -56,6 +56,14 @@ SUPERVISOR decision=Kill by=supervisor_task
 RECOVERY_APPLIED policy=Kill
 ```
 
+The acknowledgement is capability-gated (AXIOM-ROBUST-005B): the caller
+must hold a fault-channel endpoint capability carrying the **Control**
+right — exactly the capability the boot policy mints for
+`supervisor_task` and no one else. Any other caller is denied with
+`CAP_DENIED` / `ERR_INVALID_CAP` and no recovery evidence is recorded,
+so a capability-less task cannot forge `RECOVERY_APPLIED` lines or push
+recovery events into the kernel event ring.
+
 The faulted task is already contained (Faulted, never rescheduled); Kill
 is the terminal decision in the demo. Restart (re-create from the boot
 image) is a v0.9+ elaboration.

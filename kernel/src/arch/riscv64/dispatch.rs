@@ -1570,12 +1570,30 @@ fn notify_supervisor_and_logger(faulted_name: &str) {
     }
 }
 
+/// True if the caller holds an endpoint capability naming `ep_id` with
+/// the `required` rights (deny-by-default search over its table, like
+/// `cap_find`; authority is a property of the task, docs/25 §4).
+fn cap_find_endpoint(cur: usize, ep_id: u32, required: u16) -> bool {
+    tasks_mut()[cur].caps.iter().any(|c| {
+        matches!(c, Some(c) if c.otype == OTYPE_ENDPOINT
+            && c.object_id == ep_id
+            && c.rights & required == required)
+    })
+}
+
 /// sys_fault_ack: a1 = recovery decision code (2 = Kill). The supervisor
 /// closes the fault-handling loop; the kernel records the applied policy
-/// (AXIOM-SUPRT-006/007). The faulted task is already contained
-/// (Faulted); Kill is the terminal recovery in the demo.
+/// (AXIOM-SUPRT-006/007). Requires a fault-channel endpoint capability
+/// with the Control right (docs/04; minted only to the supervisor,
+/// AXIOM-ROBUST-005B) so no other task can forge recovery evidence. The
+/// faulted task is already contained (Faulted); Kill is the terminal
+/// recovery in the demo.
 fn fault_ack(frame: &mut TrapFrame) {
     let cur = CURRENT.load(Ordering::SeqCst);
+    if !cap_find_endpoint(cur, EP_FAULT, RIGHT_CONTROL) {
+        frame.set_a0(deny_authority(cur, "no_fault_ack_capability"));
+        return;
+    }
     let cur_name = tasks_mut()[cur].name;
     let decision = frame.regs[10]; // a1
     let policy = match decision {
