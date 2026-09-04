@@ -74,7 +74,9 @@ pub struct ParsedLog {
 fn categorize(kind: &str, fields: &[(String, String)]) -> Option<Category> {
     let field = |k: &str| fields.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
     Some(match kind {
-        "TASK_STARTED" | "TASK_EXITED" | "TASK_FAULTED" => Category::Task,
+        "TASK_STARTED" | "TASK_EXITED" | "TASK_FAULTED" | "TASK_KILLED" | "TASK_RESTARTED" => {
+            Category::Task
+        }
         "SCHED" => Category::Scheduler,
         "SYSCALL" => Category::Syscall,
         "IPC" | "IPC_DENIED" => Category::Ipc,
@@ -90,8 +92,10 @@ fn categorize(kind: &str, fields: &[(String, String)]) -> Option<Category> {
         "WATCHDOG_TIMEOUT" => Category::Watchdog,
         "RECOVERY_APPLIED" => Category::Recovery,
         "TIMER" => Category::Timer,
-        "SUPERVISOR" | "LOGGER" => Category::Service,
-        "MMU" | "BOOT" | "BOOT_INFO" => Category::Boot,
+        // `SERVICE started=<name>` is the docs/25 §3 service-start
+        // evidence line; SHUTDOWN is the controlled docs/25 §4 exit.
+        "SUPERVISOR" | "LOGGER" | "SERVICE" => Category::Service,
+        "MMU" | "BOOT" | "BOOT_INFO" | "SHUTDOWN" => Category::Boot,
         // Driver framework vocabulary (docs/31 §7-§9).
         "DEVICE" | "DEVICE_DENIED" | "MMIO" | "MMIO_DENIED" | "DMA" | "DMA_DENIED" | "IRQ"
         | "IRQ_DENIED" | "IRQ_DROPPED" | "DRIVER" | "DRIVER_MANAGER" => Category::Driver,
@@ -482,6 +486,28 @@ mod tests {
         );
         assert!(s.contains("DEVICE x1"));
         assert!(s.contains("DRIVER x1"));
+    }
+
+    // OS-flow lifecycle lines, verbatim from os_boot.rs (docs/25 §3/§4).
+    #[test]
+    fn service_and_lifecycle_lines_parse() {
+        let started = parse_line("SERVICE started=net_service").expect("SERVICE parses");
+        assert_eq!(started.category, Category::Service);
+        assert_eq!(field(&started, "started"), Some("net_service"));
+
+        let killed = parse_line("TASK_KILLED task=hello").expect("TASK_KILLED parses");
+        assert_eq!(killed.category, Category::Task);
+        assert_eq!(field(&killed, "task"), Some("hello"));
+
+        let restarted =
+            parse_line("TASK_RESTARTED task=block_driver_service").expect("TASK_RESTARTED parses");
+        assert_eq!(restarted.category, Category::Task);
+        assert_eq!(field(&restarted, "task"), Some("block_driver_service"));
+
+        let shutdown =
+            parse_line("SHUTDOWN controlled=true by=shell_service").expect("SHUTDOWN parses");
+        assert_eq!(shutdown.category, Category::Boot);
+        assert_eq!(field(&shutdown, "by"), Some("shell_service"));
     }
 
     #[test]
