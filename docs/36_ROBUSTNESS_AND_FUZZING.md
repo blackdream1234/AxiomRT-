@@ -218,10 +218,74 @@ and cross-page pointer cases remain deferred to AXIOM-ROBUST-013.
   wrong-object, insufficient-right, or cross-task attempts are
   `SAFE_REJECT` with capability-denial evidence and no target state
   change.
-* **Coverage:** current host and QEMU capability tests cover primary
-  deny-by-default behavior. AXIOM-ROBUST-004 adds all-bits/unknown-bits,
-  amplification, restart reuse, wrong endpoint/device, and app attempts to
-  reach network/device objects.
+* **Coverage:** AXIOM-ROBUST-004 implements deterministic host capability
+  fuzzing for the adversarial matrix below. Existing QEMU denial evidence
+  remains separate; no runtime code changed and no new QEMU claim is made.
+
+#### 5.4.1 Implemented host coverage (AXIOM-ROBUST-004)
+
+The `axiom-fuzz` `capability` target reuses the shared generator, engine,
+result accounting, deterministic artifact, and exact-byte replay path. Each
+case has at most 16 operations, executes twice from fresh state, and must
+produce identical counters and final state (CAP-INV-014). Host-reachable
+panics are caught and reported as CAP-INV-015 failures.
+
+The target routes authority decisions through real public kernel APIs:
+
+* `CapTable::insert`, `lookup`, `query`, and `revoke`; `Capability`,
+  `ObjectRef`, `ObjectType`, `Rights`, and `derive_diminished` for generic
+  endpoint/task authority;
+* `send_checked`, `Message`, and `Endpoint` for wrong/revoked endpoint
+  attempts and unchanged rendezvous state;
+* `DeviceTable::check`, `DeviceCapability`, `DeviceId`, and `DeviceRights`
+  for block0/net0 presence, identity, and rights checks.
+
+A named 35-scenario bank guarantees valid, empty, invalid, repeated,
+clear/revoke/double-revoke, runtime-slot boundary, host-slot boundary,
+wrong type/control type/object/endpoint/device, nonexistent device,
+missing/zero/all-known/all-bits/unknown rights, equal/subset/empty/superset
+derivation, cross-task slot reuse, kill/fault, restart, capability-less
+application, valid-device, and full-host-table cases. Remaining input bytes
+decode deterministically into Lookup, LookupAfterRevoke, Derive,
+ReduceRights, AttemptAmplification, ReplaceSlot, ClearSlot, CrossTaskUse,
+wrong binding, rights, revoke/restore/restart, lifecycle, device-use, and
+fill-table operations.
+
+CAP-INV-001 through CAP-INV-015 enforce absence, revocation, type/object
+binding, required rights, unknown-bit rejection, monotonic derivation,
+per-task isolation, no rejected-target mutation, immediate revocation,
+boot-bounded restart, deterministic state, and panic-free host execution.
+Ordinary denials are `SAFE_REJECT`; only filling all 32 generic host slots
+is `BOUNDED_RESOURCE_EXHAUSTION`; this target emits no
+`CONTAINED_USER_FAULT` for validation errors.
+
+This remains host-model evidence, with deliberate representation limits:
+
+* generic `CapTable` capacity is 32, but the private runtime `Cap` array has
+  9 slots (0-8); host slot 9 is therefore only an observed representation
+  difference, not runtime one-beyond proof;
+* host device capabilities are a separate typed API, while runtime endpoint,
+  console, control, info, and device caps share one tagged 9-slot array;
+* generic host `Rights` exposes the eight bits 0-7. Runtime endpoint caps
+  also carry boot-only filesystem/storage/network policy bits 8-13. Unknown
+  raw patterns cannot be constructed through the private host types, so the
+  fuzz input adapter rejects them before minting and verifies they cannot
+  substitute for a missing known right;
+* the restart adapter rebuilds representative service/manager boot caps and
+  an empty application profile. The live runtime preserves its statically
+  boot-minted cap array when re-arming a task and exposes no U-mode
+  mint/derive/replace syscall; this target does not execute that RISC-V path;
+* inspection confirms 12 runtime endpoints (IDs 0-11), 2 devices (IDs 0-1),
+  and no boot-granted network/device authority for ordinary applications or
+  `fault_demo`, but the representative host profiles are not a proof of the
+  complete boot service table.
+
+The existing `tests/capability_qemu_test.sh` remains evidence for one live
+capability-less IPC denial and unchanged endpoint state. This task did not
+rerun or extend QEMU because no runtime defect or runtime change was found.
+Live syscall-slot mutation, exact 9-slot capacity, boot-cap installation,
+restart-table behavior, and integrated application/device/network authority
+remain assigned to AXIOM-ROBUST-005, -011, -012, and -014.
 
 ### 5.5 Endpoint identifiers and endpoint state
 
