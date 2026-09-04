@@ -42,12 +42,296 @@ struct Job {
     log: String,
 }
 
+// ---------------------------------------------------------------------
+// Live QEMU session (AXIOM-STUDIO-001): one interactive os_boot boot
+// driven only through the fixed scenario command table below. The
+// serial log is the single source of truth — Studio derives state from
+// parsed events and never invents system state.
+// ---------------------------------------------------------------------
+
+/// Serial log retention bound (docs/24 §6 / docs/36 §5.12: Studio must
+/// not introduce unbounded history growth).
+const SESSION_LOG_MAX: usize = 1024 * 1024;
+/// Issued-command history bound.
+const SESSION_CMDS_MAX: usize = 200;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SessionStatus {
+    Idle,
+    Building,
+    Running,
+    Stopped,
+    Failed,
+}
+
+impl SessionStatus {
+    fn name(self) -> &'static str {
+        match self {
+            SessionStatus::Idle => "idle",
+            SessionStatus::Building => "building",
+            SessionStatus::Running => "running",
+            SessionStatus::Stopped => "stopped",
+            SessionStatus::Failed => "failed",
+        }
+    }
+}
+
+struct Session {
+    status: SessionStatus,
+    log: String,
+    stdin: Option<std::process::ChildStdin>,
+    child: Option<std::process::Child>,
+    commands: Vec<String>,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Session {
+            status: SessionStatus::Idle,
+            log: String::new(),
+            stdin: None,
+            child: None,
+            commands: Vec::new(),
+        }
+    }
+}
+
+/// How a scenario is presented and guarded in the UI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScenarioKind {
+    /// Read-only observation command.
+    Observe,
+    /// Normal state-changing action (run/load/restart/send).
+    Action,
+    /// Deliberate test fault — destructive by intent, marked in the UI.
+    Fault,
+}
+
+impl ScenarioKind {
+    fn name(self) -> &'static str {
+        match self {
+            ScenarioKind::Observe => "observe",
+            ScenarioKind::Action => "action",
+            ScenarioKind::Fault => "fault",
+        }
+    }
+}
+
+/// The complete scenario command whitelist. Every command string is a
+/// documented shell command (docs/26, docs/27, docs/28, docs/29,
+/// docs/31, docs/34) exercised verbatim by the QEMU test scripts. The
+/// browser can only name a scenario key — it can never inject a free
+/// command line into the target.
+const SCENARIOS: &[(&str, &str, &str, ScenarioKind)] = &[
+    ("help", "help", "List shell commands", ScenarioKind::Observe),
+    (
+        "version",
+        "version",
+        "Kernel version string",
+        ScenarioKind::Observe,
+    ),
+    (
+        "tasks",
+        "tasks",
+        "Task table (sys_info)",
+        ScenarioKind::Observe,
+    ),
+    (
+        "caps",
+        "caps",
+        "Per-task capability kinds",
+        ScenarioKind::Observe,
+    ),
+    ("ipc", "ipc", "Endpoint states", ScenarioKind::Observe),
+    (
+        "memory",
+        "memory",
+        "Memory layout facts",
+        ScenarioKind::Observe,
+    ),
+    ("uptime", "uptime", "Timer ticks", ScenarioKind::Observe),
+    (
+        "events",
+        "events",
+        "Kernel event ring",
+        ScenarioKind::Observe,
+    ),
+    (
+        "faults",
+        "faults",
+        "Fault/denial ring entries",
+        ScenarioKind::Observe,
+    ),
+    ("ls", "ls", "List filesystem root", ScenarioKind::Observe),
+    ("bin", "bin", "List /bin app records", ScenarioKind::Observe),
+    (
+        "storage_info",
+        "storage info",
+        "Storage geometry",
+        ScenarioKind::Observe,
+    ),
+    (
+        "drivers",
+        "drivers",
+        "Driver manager status",
+        ScenarioKind::Observe,
+    ),
+    (
+        "driver_info",
+        "driver info block",
+        "Block device info via driver",
+        ScenarioKind::Observe,
+    ),
+    (
+        "net_status",
+        "net status",
+        "Network service status",
+        ScenarioKind::Observe,
+    ),
+    (
+        "net_stats",
+        "net stats",
+        "Network TX/RX counters",
+        ScenarioKind::Observe,
+    ),
+    (
+        "run_hello",
+        "run hello",
+        "Run the hello application",
+        ScenarioKind::Action,
+    ),
+    (
+        "app_load_hello",
+        "app load hello",
+        "Load hello from storage-backed /bin",
+        ScenarioKind::Action,
+    ),
+    (
+        "app_state_hello",
+        "app state hello",
+        "Query loaded-app state",
+        ScenarioKind::Observe,
+    ),
+    (
+        "run_loaded_hello",
+        "run loaded hello",
+        "Run the loaded hello image",
+        ScenarioKind::Action,
+    ),
+    (
+        "app_unload_hello",
+        "app unload hello",
+        "Unload the hello image",
+        ScenarioKind::Action,
+    ),
+    (
+        "app_load_bad_magic",
+        "app load invalid_bad_magic",
+        "Loader rejects a corrupt image record",
+        ScenarioKind::Action,
+    ),
+    (
+        "net_send",
+        "net send-test",
+        "Send one synthetic 64-byte test packet",
+        ScenarioKind::Action,
+    ),
+    (
+        "net_rx",
+        "net rx-count",
+        "Synthetic RX counter",
+        ScenarioKind::Observe,
+    ),
+    (
+        "net_malformed",
+        "net malformed",
+        "Malformed network request is rejected",
+        ScenarioKind::Action,
+    ),
+    (
+        "run_fault_demo",
+        "run fault_demo",
+        "Capability-less app: denial + contained fault",
+        ScenarioKind::Fault,
+    ),
+    (
+        "run_demo",
+        "run demo",
+        "Faulty task: watchdog containment + recovery",
+        ScenarioKind::Fault,
+    ),
+    (
+        "driver_fault",
+        "driver fault block",
+        "Deliberate block-driver test fault",
+        ScenarioKind::Fault,
+    ),
+    (
+        "driver_restart",
+        "driver restart block",
+        "Restart the block driver",
+        ScenarioKind::Action,
+    ),
+    (
+        "net_fault",
+        "net fault",
+        "Deliberate network-driver test fault",
+        ScenarioKind::Fault,
+    ),
+    (
+        "net_restart",
+        "net restart",
+        "Restart the network driver",
+        ScenarioKind::Action,
+    ),
+    (
+        "shutdown",
+        "shutdown",
+        "Controlled shutdown (ends session)",
+        ScenarioKind::Fault,
+    ),
+];
+
+fn scenario(
+    name: &str,
+) -> Option<&'static (&'static str, &'static str, &'static str, ScenarioKind)> {
+    SCENARIOS.iter().find(|(key, _, _, _)| *key == name)
+}
+
+/// Append a line to a bounded log, trimming the oldest bytes at a char
+/// boundary once the bound is exceeded.
+fn push_bounded(log: &mut String, line: &str, max: usize) {
+    log.push_str(line);
+    log.push('\n');
+    if log.len() > max {
+        let cut = log.len() - max;
+        let start = (cut..log.len())
+            .find(|&i| log.is_char_boundary(i))
+            .unwrap_or(cut);
+        *log = log[start..].to_string();
+    }
+}
+
 struct State {
     busy: Option<&'static str>,
     demo: Job,
     verify: Job,
     kit: Job,
+    fuzz: Job,
+    session: Session,
     doctor: Vec<(String, String)>,
+}
+
+/// Which serial text the observation pages derive from: the live
+/// session once one exists, else the last bounded demo run.
+fn event_source(st: &State) -> (&'static str, &str) {
+    if !st.session.log.is_empty() {
+        ("live_session", &st.session.log)
+    } else if !st.demo.log.is_empty() {
+        ("demo_run", &st.demo.log)
+    } else {
+        ("none", "")
+    }
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -70,7 +354,9 @@ fn main() {
         demo: Job::default(),
         verify: Job::default(),
         kit: Job::default(),
-        doctor: doctor_info(),
+        fuzz: Job::default(),
+        session: Session::default(),
+        doctor: doctor_info(&root),
     }));
 
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
@@ -93,8 +379,8 @@ fn main() {
     }
 }
 
-/// Tool versions for the status panel, gathered once at startup.
-fn doctor_info() -> Vec<(String, String)> {
+/// Tool versions plus the repository state, gathered once at startup.
+fn doctor_info(root: &Path) -> Vec<(String, String)> {
     let probe = |name: &str, prog: &str| {
         let line = Command::new(prog)
             .arg("--version")
@@ -112,7 +398,16 @@ fn doctor_info() -> Vec<(String, String)> {
             .unwrap_or_else(|| "missing".to_string());
         (name.to_string(), line)
     };
+    let describe = Command::new("git")
+        .args(["describe", "--tags", "--always", "--dirty"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
     vec![
+        ("repository".to_string(), describe),
         probe("rustc", "rustc"),
         probe("cargo", "cargo"),
         probe("qemu-system-riscv64", "qemu-system-riscv64"),
@@ -161,9 +456,23 @@ fn handle(mut stream: TcpStream, state: &Shared, root: &Path) -> std::io::Result
         ("POST", "/api/run_demo") => api_start(&mut stream, state, root, "demo"),
         ("POST", "/api/run_verify") => api_start(&mut stream, state, root, "verify"),
         ("POST", "/api/kit_build") => api_start(&mut stream, state, root, "kit"),
+        ("POST", "/api/run_fuzz") => api_start(&mut stream, state, root, "fuzz"),
         ("GET", "/api/events") => api_events(&mut stream, state),
+        ("GET", "/api/policy") => respond(&mut stream, 200, "application/json", &policy_json()),
+        ("POST", "/api/session/start") => api_session_start(&mut stream, state, root),
+        ("POST", "/api/session/cmd") => api_session_cmd(&mut stream, state, query),
+        ("POST", "/api/session/stop") => api_session_stop(&mut stream, state),
+        ("GET", "/api/session") => api_session_state(&mut stream, state),
+        ("GET", "/api/session/log") => {
+            let log = tail(&state.lock().unwrap().session.log, 200_000);
+            respond(&mut stream, 200, "text/plain; charset=utf-8", &log)
+        }
         ("GET", "/api/log") => {
             let log = tail(&state.lock().unwrap().demo.log, 200_000);
+            respond(&mut stream, 200, "text/plain; charset=utf-8", &log)
+        }
+        ("GET", "/api/fuzz_log") => {
+            let log = tail(&state.lock().unwrap().fuzz.log, 200_000);
             respond(&mut stream, 200, "text/plain; charset=utf-8", &log)
         }
         ("GET", "/api/verify_log") => api_verify_log(&mut stream, state, root),
@@ -192,7 +501,10 @@ fn page_route(path: &str) -> bool {
     matches!(
         path,
         "/" | "/run"
+            | "/session"
+            | "/scenarios"
             | "/tasks"
+            | "/services"
             | "/scheduler"
             | "/faults"
             | "/ipc"
@@ -200,6 +512,7 @@ fn page_route(path: &str) -> bool {
             | "/drivers"
             | "/network"
             | "/loader"
+            | "/events"
             | "/tests"
             | "/proofs"
             | "/evidence"
@@ -295,6 +608,16 @@ fn api_start(
         ),
         "verify" => "./scripts/verify_all.sh 2>&1".to_string(),
         "kit" => "./scripts/build_eval_kit.sh 2>&1".to_string(),
+        // Deterministic bounded fuzz evidence (docs/36 §6.1): the three
+        // protocol targets with fixed seeds; each exits non-zero on any
+        // KERNEL_INVARIANT_FAILURE, failing the whole job.
+        "fuzz" => "for t in 'ipc 20260903' 'capability 20260903' 'syscall 20260904'; do \
+             set -- $t; \
+             echo \"=== fuzz target $1 seed $2 ===\"; \
+             cargo run -q -p axiom-fuzz --target x86_64-unknown-linux-gnu -- \
+             --fuzz-target $1 --seed $2 --iterations 10000 --max-len 128 2>&1 || exit 1; \
+             done"
+            .to_string(),
         _ => unreachable!(),
     };
 
@@ -308,6 +631,7 @@ fn job_mut<'a>(st: &'a mut State, which: &str) -> &'a mut Job {
     match which {
         "demo" => &mut st.demo,
         "verify" => &mut st.verify,
+        "fuzz" => &mut st.fuzz,
         _ => &mut st.kit,
     }
 }
@@ -371,20 +695,268 @@ fn api_state(stream: &mut TcpStream, state: &Shared) -> std::io::Result<()> {
         .collect::<Vec<_>>()
         .join(",");
     let body = format!(
-        "{{\"busy\":{},\"demo\":{},\"verify\":{},\"kit\":{},\"doctor\":[{}]}}",
+        "{{\"busy\":{},\"demo\":{},\"verify\":{},\"kit\":{},\"fuzz\":{},\
+         \"session\":\"{}\",\"doctor\":[{}]}}",
         st.busy
             .map(|b| format!("\"{b}\""))
             .unwrap_or_else(|| "null".to_string()),
         job(&st.demo),
         job(&st.verify),
         job(&st.kit),
+        job(&st.fuzz),
+        st.session.status.name(),
         doctor
     );
     respond(stream, 200, "application/json", &body)
 }
 
+// ---------------------------------------------------------------------
+// Live session endpoints (AXIOM-STUDIO-001): build the os_boot kernel,
+// boot it interactively under QEMU, and drive it exclusively through
+// the fixed scenario whitelist.
+// ---------------------------------------------------------------------
+
+fn api_session_start(stream: &mut TcpStream, state: &Shared, root: &Path) -> std::io::Result<()> {
+    {
+        let mut st = state.lock().unwrap();
+        if st.busy.is_some()
+            || matches!(
+                st.session.status,
+                SessionStatus::Building | SessionStatus::Running
+            )
+        {
+            return respond(
+                stream,
+                409,
+                "application/json",
+                "{\"started\":false,\"reason\":\"busy\"}",
+            );
+        }
+        // The busy slot is held only while cargo builds; the running
+        // QEMU session itself does not block other jobs.
+        st.busy = Some("session-build");
+        st.session = Session {
+            status: SessionStatus::Building,
+            ..Session::default()
+        };
+    }
+    let state = Arc::clone(state);
+    let root = root.to_path_buf();
+    thread::spawn(move || run_session(&state, &root));
+    respond(stream, 200, "application/json", "{\"started\":true}")
+}
+
+fn run_session(state: &Shared, root: &Path) {
+    let build = Command::new("cargo")
+        .args([
+            "build",
+            "--release",
+            "--features",
+            "os_boot",
+            "-p",
+            "kernel",
+        ])
+        .current_dir(root)
+        .output();
+    let built = matches!(&build, Ok(o) if o.status.success());
+    {
+        let mut st = state.lock().unwrap();
+        st.busy = None;
+        if !built {
+            let detail = build
+                .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+                .unwrap_or_else(|e| e.to_string());
+            push_bounded(
+                &mut st.session.log,
+                &format!("[studio] kernel build failed:\n{detail}"),
+                SESSION_LOG_MAX,
+            );
+            st.session.status = SessionStatus::Failed;
+            return;
+        }
+        push_bounded(
+            &mut st.session.log,
+            "[studio] os_boot kernel built; booting QEMU",
+            SESSION_LOG_MAX,
+        );
+    }
+
+    let child = Command::new("qemu-system-riscv64")
+        .args([
+            "-machine",
+            "virt",
+            "-smp",
+            "1",
+            "-m",
+            "128M",
+            "-nographic",
+            "-bios",
+            "default",
+            "-kernel",
+            "target/riscv64gc-unknown-none-elf/release/kernel",
+        ])
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(e) => {
+            let mut st = state.lock().unwrap();
+            push_bounded(
+                &mut st.session.log,
+                &format!("[studio] cannot start qemu-system-riscv64: {e}"),
+                SESSION_LOG_MAX,
+            );
+            st.session.status = SessionStatus::Failed;
+            return;
+        }
+    };
+    let stdout = child.stdout.take();
+    {
+        let mut st = state.lock().unwrap();
+        st.session.stdin = child.stdin.take();
+        st.session.child = Some(child);
+        st.session.status = SessionStatus::Running;
+    }
+
+    // Reader loop: serial output into the bounded session log.
+    if let Some(out) = stdout {
+        for line in BufReader::new(out).lines() {
+            let Ok(line) = line else { break };
+            let mut st = state.lock().unwrap();
+            push_bounded(&mut st.session.log, &line, SESSION_LOG_MAX);
+        }
+    }
+    // Serial EOF: QEMU exited (controlled shutdown or kill). Reap it.
+    let mut st = state.lock().unwrap();
+    st.session.stdin = None;
+    if let Some(mut child) = st.session.child.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    if st.session.status == SessionStatus::Running {
+        st.session.status = SessionStatus::Stopped;
+    }
+    push_bounded(
+        &mut st.session.log,
+        "[studio] QEMU session ended",
+        SESSION_LOG_MAX,
+    );
+}
+
+fn api_session_cmd(stream: &mut TcpStream, state: &Shared, query: &str) -> std::io::Result<()> {
+    let Some(name) = query_param(query, "name") else {
+        return respond(stream, 400, "text/plain", "name required");
+    };
+    let Some((_, command, _, _)) = scenario(name) else {
+        return respond(stream, 400, "text/plain", "unknown scenario");
+    };
+    let mut st = state.lock().unwrap();
+    if st.session.status != SessionStatus::Running {
+        return respond(
+            stream,
+            409,
+            "application/json",
+            "{\"sent\":false,\"reason\":\"no running session\"}",
+        );
+    }
+    let Some(stdin) = st.session.stdin.as_mut() else {
+        return respond(
+            stream,
+            409,
+            "application/json",
+            "{\"sent\":false,\"reason\":\"session input closed\"}",
+        );
+    };
+    // The shell reads CR-terminated lines (as the QEMU test scripts do).
+    let ok = stdin
+        .write_all(command.as_bytes())
+        .and_then(|_| stdin.write_all(b"\r"))
+        .and_then(|_| stdin.flush())
+        .is_ok();
+    if ok {
+        if st.session.commands.len() == SESSION_CMDS_MAX {
+            st.session.commands.remove(0);
+        }
+        st.session.commands.push(command.to_string());
+        respond(stream, 200, "application/json", "{\"sent\":true}")
+    } else {
+        respond(
+            stream,
+            409,
+            "application/json",
+            "{\"sent\":false,\"reason\":\"write failed\"}",
+        )
+    }
+}
+
+fn api_session_stop(stream: &mut TcpStream, state: &Shared) -> std::io::Result<()> {
+    {
+        let mut st = state.lock().unwrap();
+        if st.session.status != SessionStatus::Running {
+            return respond(
+                stream,
+                409,
+                "application/json",
+                "{\"stopped\":false,\"reason\":\"no running session\"}",
+            );
+        }
+        // Ask the shell for a controlled shutdown (SBI system reset).
+        if let Some(stdin) = st.session.stdin.as_mut() {
+            let _ = stdin.write_all(b"shutdown\r");
+            let _ = stdin.flush();
+        }
+    }
+    // Fallback: if QEMU is still alive shortly after, kill it; the
+    // reader thread then reaps it and marks the session Stopped.
+    let state = Arc::clone(state);
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_secs(6));
+        let mut st = state.lock().unwrap();
+        if let Some(child) = st.session.child.as_mut() {
+            let _ = child.kill();
+        }
+    });
+    respond(stream, 200, "application/json", "{\"stopped\":true}")
+}
+
+fn api_session_state(stream: &mut TcpStream, state: &Shared) -> std::io::Result<()> {
+    let st = state.lock().unwrap();
+    let scenarios = SCENARIOS
+        .iter()
+        .map(|(key, command, label, kind)| {
+            format!(
+                "{{\"name\":\"{}\",\"command\":\"{}\",\"label\":\"{}\",\"kind\":\"{}\"}}",
+                json_escape(key),
+                json_escape(command),
+                json_escape(label),
+                kind.name()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let commands = st
+        .session
+        .commands
+        .iter()
+        .map(|c| format!("\"{}\"", json_escape(c)))
+        .collect::<Vec<_>>()
+        .join(",");
+    let body = format!(
+        "{{\"status\":\"{}\",\"log_bytes\":{},\"commands\":[{}],\"scenarios\":[{}]}}",
+        st.session.status.name(),
+        st.session.log.len(),
+        commands,
+        scenarios
+    );
+    respond(stream, 200, "application/json", &body)
+}
+
 /// Task table derived from events (docs/24 §5.4): started tasks with
-/// the last state the evidence supports.
+/// the last state the evidence supports. This is observed event state,
+/// not direct kernel introspection.
 fn derive_tasks(evs: &[Event]) -> Vec<(String, String)> {
     let mut tasks: Vec<(String, String)> = Vec::new();
     let field = |ev: &Event, k: &str| -> Option<String> {
@@ -392,6 +964,13 @@ fn derive_tasks(evs: &[Event]) -> Vec<(String, String)> {
             .iter()
             .find(|(n, _)| n == k)
             .map(|(_, v)| v.clone())
+    };
+    let set_or_push = |tasks: &mut Vec<(String, String)>, name: String, state: &str| match tasks
+        .iter_mut()
+        .find(|(n, _)| *n == name)
+    {
+        Some((_, s)) => *s = state.to_string(),
+        None => tasks.push((name, state.to_string())),
     };
     let mut last_faulted: Option<String> = None;
     for ev in evs {
@@ -401,21 +980,37 @@ fn derive_tasks(evs: &[Event]) -> Vec<(String, String)> {
                     tasks.push((t, "running".to_string()));
                 }
             }
+            // os_boot flow: services announce with SERVICE started=.
+            "SERVICE" => {
+                if let Some(t) = field(ev, "started") {
+                    set_or_push(&mut tasks, t, "running");
+                }
+            }
             "TASK_EXITED" => {
                 if let Some(t) = field(ev, "task") {
-                    set_state(&mut tasks, &t, "exited");
+                    set_or_push(&mut tasks, t, "exited");
                 }
             }
             "FAULT" | "TASK_FAULTED" => {
                 if let Some(t) = field(ev, "task") {
-                    set_state(&mut tasks, &t, "faulted");
+                    set_or_push(&mut tasks, t.clone(), "faulted");
                     last_faulted = Some(t);
+                }
+            }
+            "TASK_KILLED" => {
+                if let Some(t) = field(ev, "task") {
+                    set_or_push(&mut tasks, t, "killed");
+                }
+            }
+            "TASK_RESTARTED" => {
+                if let Some(t) = field(ev, "task") {
+                    set_or_push(&mut tasks, t, "running");
                 }
             }
             "RECOVERY_APPLIED" => {
                 if let (Some(policy), Some(t)) = (field(ev, "policy"), last_faulted.clone()) {
                     if policy == "Kill" {
-                        set_state(&mut tasks, &t, "killed");
+                        set_or_push(&mut tasks, t, "killed");
                     }
                 }
             }
@@ -425,10 +1020,182 @@ fn derive_tasks(evs: &[Event]) -> Vec<(String, String)> {
     tasks
 }
 
-fn set_state(tasks: &mut [(String, String)], name: &str, state: &str) {
-    if let Some((_, s)) = tasks.iter_mut().find(|(n, _)| n == name) {
-        *s = state.to_string();
+/// The boot-frozen service set (docs/25 §3): init plus the 15 table
+/// entries. Used by the Services view so unobserved services render as
+/// "not_observed" instead of silently disappearing.
+const KNOWN_SERVICES: [&str; 16] = [
+    "init_service",
+    "supervisor_service",
+    "logger_service",
+    "console_service",
+    "shell_service",
+    "faulty_task",
+    "app_loader_service",
+    "hello",
+    "fault_demo",
+    "counter",
+    "fs_service",
+    "storage_service",
+    "driver_manager",
+    "block_driver_service",
+    "net_driver_service",
+    "net_service",
+];
+
+/// Per-service observed lifecycle: (name, state, faults, restarts).
+/// Faults count kernel FAULT/TASK_FAULTED containment lines; restarts
+/// count TASK_RESTARTED plus repeated SERVICE started= re-arms.
+fn derive_services(evs: &[Event]) -> Vec<(String, String, usize, usize)> {
+    let states = derive_tasks(evs);
+    fn field<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
+        ev.fields
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.as_str())
     }
+    KNOWN_SERVICES
+        .iter()
+        .map(|name| {
+            let state = states
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, s)| s.clone())
+                .unwrap_or_else(|| "not_observed".to_string());
+            let mut faults = 0usize;
+            let mut restarts = 0usize;
+            let mut starts = 0usize;
+            for ev in evs {
+                match ev.kind.as_str() {
+                    "FAULT" | "TASK_FAULTED" if field(ev, "task") == Some(name) => faults += 1,
+                    "TASK_RESTARTED" if field(ev, "task") == Some(name) => restarts += 1,
+                    "SERVICE" if field(ev, "started") == Some(name) => {
+                        starts += 1;
+                        if starts > 1 {
+                            restarts += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            (name.to_string(), state, faults, restarts)
+        })
+        .collect()
+}
+
+/// Static boot capability policy (docs/25 §5, mirrored from the
+/// os_boot.rs service table). This is the ARCHITECTURE model shown by
+/// the Capabilities view — explicitly not live cap-table telemetry,
+/// which the kernel does not export per slot.
+fn policy_json() -> String {
+    const POLICY: &[(&str, &[&str])] = &[
+        (
+            "init_service",
+            &["control (task start/kill/restart/shutdown)"],
+        ),
+        (
+            "supervisor_service",
+            &["endpoint fault_channel (recv, control)"],
+        ),
+        ("logger_service", &["endpoint event_channel (recv)"]),
+        (
+            "console_service",
+            &["endpoint line_channel (send)", "console (recv, send)"],
+        ),
+        (
+            "shell_service",
+            &[
+                "endpoint line_channel (recv)",
+                "console (send)",
+                "info (read-only introspection)",
+                "control (task start/kill/restart/shutdown)",
+                "endpoint app_channel (send, recv)",
+                "endpoint fs_channel (send, recv, fs_read, fs_list)",
+                "endpoint storage_channel (send, recv, storage_info, storage_read)",
+                "endpoint driver_mgr_channel (send, recv)",
+                "endpoint net_channel (send, recv, net_status, net_tx, net_rx, net_control)",
+            ],
+        ),
+        ("faulty_task", &[]),
+        (
+            "app_loader_service",
+            &[
+                "endpoint app_channel (recv, send)",
+                "control (task start/kill/restart/shutdown)",
+                "endpoint fs_channel (send, recv, fs_read)",
+                "console (send)",
+                "info (read-only introspection)",
+            ],
+        ),
+        ("hello", &["console (send)"]),
+        ("fault_demo", &[]),
+        ("counter", &["console (send)"]),
+        (
+            "fs_service",
+            &[
+                "endpoint fs_channel (recv, send)",
+                "endpoint storage_channel (send, recv, storage_read)",
+            ],
+        ),
+        (
+            "storage_service",
+            &["endpoint storage_channel (recv, send)"],
+        ),
+        (
+            "driver_manager",
+            &[
+                "endpoint driver_mgr_channel (recv, send)",
+                "endpoint block_cmd_channel (send, recv)",
+                "control (task start/kill/restart/shutdown)",
+                "console (send)",
+                "device block0 (driver_control)",
+                "endpoint net_drv_channel (send, recv)",
+                "device net0 (driver_control)",
+            ],
+        ),
+        (
+            "block_driver_service",
+            &[
+                "endpoint block_cmd_channel (recv, send)",
+                "device block0 (info, mmio_read, dma_read, dma_write, irq_receive)",
+                "endpoint driver_irq_channel (recv)",
+            ],
+        ),
+        (
+            "net_driver_service",
+            &[
+                "endpoint net_drv_channel (recv, send)",
+                "device net0 (info, irq_receive, network_driver)",
+                "endpoint net_irq_channel (recv)",
+                "console (send)",
+            ],
+        ),
+        (
+            "net_service",
+            &[
+                "endpoint net_channel (recv, send, net_status, net_tx, net_rx, net_control)",
+                "endpoint net_drv_channel (send, recv)",
+                "endpoint driver_mgr_channel (send, recv)",
+                "console (send)",
+            ],
+        ),
+    ];
+    let services = POLICY
+        .iter()
+        .map(|(name, caps)| {
+            let caps = caps
+                .iter()
+                .map(|c| format!("\"{}\"", json_escape(c)))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{\"name\":\"{}\",\"caps\":[{caps}]}}", json_escape(name))
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"source\":\"boot policy (docs/25 \\u00a75, mirrored from os_boot.rs) — \
+         static architecture model, not live cap-table telemetry\",\
+         \"services\":[{services}]}}"
+    )
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -510,7 +1277,11 @@ fn derive_network(evs: &[Event]) -> NetworkView {
 
 fn api_events(stream: &mut TcpStream, state: &Shared) -> std::io::Result<()> {
     const EVENT_CAP: usize = 1500;
-    let log_text = state.lock().unwrap().demo.log.clone();
+    let (source, log_text) = {
+        let st = state.lock().unwrap();
+        let (source, text) = event_source(&st);
+        (source, text.to_string())
+    };
     let parsed = events::parse_log(&log_text);
 
     // Per-kind counts per category, and scheduler selections per task.
@@ -549,6 +1320,17 @@ fn api_events(stream: &mut TcpStream, state: &Shared) -> std::io::Result<()> {
         .map(|(t, s)| format!("[\"{}\",\"{}\"]", json_escape(t), json_escape(s)))
         .collect::<Vec<_>>()
         .join(",");
+    let services_json = derive_services(&parsed.events)
+        .iter()
+        .map(|(name, state, faults, restarts)| {
+            format!(
+                "[\"{}\",\"{}\",{faults},{restarts}]",
+                json_escape(name),
+                json_escape(state)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     let events_json = parsed
         .events
         .iter()
@@ -559,8 +1341,9 @@ fn api_events(stream: &mut TcpStream, state: &Shared) -> std::io::Result<()> {
     let network = derive_network(&parsed.events);
 
     let body = format!(
-        "{{\"total\":{},\"skipped\":{},\"shown\":{},\"summary\":[{}],\
-         \"sched\":[{}],\"tasks\":[{}],\"network\":{{\"state\":\"{}\",\
+        "{{\"source\":\"{source}\",\"total\":{},\"skipped\":{},\"shown\":{},\
+         \"summary\":[{}],\"sched\":[{}],\"tasks\":[{}],\"services\":[{}],\
+         \"network\":{{\"state\":\"{}\",\
          \"tx\":{},\"rx\":{},\"mode\":\"{}\",\"faults\":{},\"restarts\":{},\
          \"last_event\":\"{}\"}},\"events\":[{}]}}",
         parsed.events.len(),
@@ -569,6 +1352,7 @@ fn api_events(stream: &mut TcpStream, state: &Shared) -> std::io::Result<()> {
         summary,
         sched_json,
         tasks_json,
+        services_json,
         json_escape(&network.state),
         network.tx,
         network.rx,
@@ -797,5 +1581,165 @@ mod tests {
         assert_eq!(query_param("", "x"), None);
         assert_eq!(tail("abc", 10), "abc");
         assert!(tail(&"x".repeat(100), 10).contains("truncated"));
+    }
+
+    #[test]
+    fn new_console_pages_route() {
+        for p in ["/session", "/scenarios", "/services", "/events"] {
+            assert!(page_route(p), "page {p} must serve the shell");
+        }
+    }
+
+    // Every scenario key is unique and every command is a documented
+    // shell command form (docs/26/27/28/29/31/34) — the browser can
+    // never reach an unlisted command line.
+    #[test]
+    fn scenario_whitelist_is_closed_and_documented() {
+        const ALLOWED: [&str; 24] = [
+            "help",
+            "version",
+            "tasks",
+            "caps",
+            "ipc",
+            "memory",
+            "uptime",
+            "events",
+            "faults",
+            "ls",
+            "bin",
+            "storage info",
+            "drivers",
+            "driver info block",
+            "driver fault block",
+            "driver restart block",
+            "net status",
+            "net stats",
+            "net send-test",
+            "net rx-count",
+            "net malformed",
+            "net fault",
+            "net restart",
+            "shutdown",
+        ];
+        for (index, (key, command, label, _)) in SCENARIOS.iter().enumerate() {
+            assert!(!label.is_empty(), "scenario {key} needs a label");
+            let documented = ALLOWED.contains(command)
+                || command.starts_with("run ")
+                || command.starts_with("app load ")
+                || command.starts_with("app unload ")
+                || command.starts_with("app state ")
+                || command.starts_with("run loaded ");
+            assert!(
+                documented,
+                "scenario {key} uses undocumented command {command:?}"
+            );
+            for (other_key, other_command, _, _) in SCENARIOS.iter().skip(index + 1) {
+                assert_ne!(key, other_key, "duplicate scenario key");
+                assert_ne!(command, other_command, "duplicate scenario command");
+            }
+        }
+        assert!(scenario("net_fault").is_some());
+        assert!(scenario("rm -rf").is_none());
+        assert!(scenario("").is_none());
+        // Deliberate test faults are marked so the UI can warn.
+        for key in [
+            "run_fault_demo",
+            "run_demo",
+            "driver_fault",
+            "net_fault",
+            "shutdown",
+        ] {
+            assert_eq!(scenario(key).unwrap().3, ScenarioKind::Fault, "{key}");
+        }
+    }
+
+    #[test]
+    fn session_log_stays_bounded() {
+        let mut log = String::new();
+        for i in 0..100 {
+            push_bounded(&mut log, &format!("line {i} {}", "x".repeat(64)), 1024);
+            assert!(log.len() <= 1024 + 1, "log grew past its bound");
+        }
+        assert!(log.contains("line 99"), "newest lines are retained");
+        assert!(!log.contains("line 0 "), "oldest lines are trimmed");
+    }
+
+    #[test]
+    fn event_source_prefers_live_session() {
+        let mut st = State {
+            busy: None,
+            demo: Job::default(),
+            verify: Job::default(),
+            kit: Job::default(),
+            fuzz: Job::default(),
+            session: Session::default(),
+            doctor: Vec::new(),
+        };
+        assert_eq!(event_source(&st).0, "none");
+        st.demo.log = "TASK_STARTED task=a\n".to_string();
+        assert_eq!(event_source(&st).0, "demo_run");
+        st.session.log = "SERVICE started=shell_service\n".to_string();
+        let (source, text) = event_source(&st);
+        assert_eq!(source, "live_session");
+        assert!(text.contains("shell_service"));
+    }
+
+    #[test]
+    fn os_flow_lifecycle_updates_tasks_and_services() {
+        let log = events::parse_log(
+            "SERVICE started=net_driver_service\n\
+             SERVICE started=net_service\n\
+             SERVICE started=shell_service\n\
+             FAULT type=PageFault task=net_driver_service\n\
+             TASK_RESTARTED task=net_driver_service\n\
+             TASK_KILLED task=hello\n",
+        );
+        let tasks = derive_tasks(&log.events);
+        assert!(tasks.contains(&("net_service".to_string(), "running".to_string())));
+        assert!(tasks.contains(&("net_driver_service".to_string(), "running".to_string())));
+        assert!(tasks.contains(&("hello".to_string(), "killed".to_string())));
+
+        let services = derive_services(&log.events);
+        let net_driver = services
+            .iter()
+            .find(|(n, _, _, _)| n == "net_driver_service")
+            .unwrap();
+        assert_eq!(net_driver.1, "running");
+        assert_eq!(net_driver.2, 1, "one contained fault");
+        assert_eq!(net_driver.3, 1, "one restart");
+        let unobserved = services
+            .iter()
+            .find(|(n, _, _, _)| n == "storage_service")
+            .unwrap();
+        assert_eq!(unobserved.1, "not_observed");
+        assert_eq!(services.len(), KNOWN_SERVICES.len());
+    }
+
+    #[test]
+    fn repeated_service_start_counts_as_restart() {
+        let log = events::parse_log(
+            "SERVICE started=hello\n\
+             TASK_KILLED task=hello\n\
+             SERVICE started=hello\n",
+        );
+        let services = derive_services(&log.events);
+        let hello = services.iter().find(|(n, _, _, _)| n == "hello").unwrap();
+        assert_eq!(hello.1, "running");
+        assert_eq!(hello.3, 1, "re-arm counts as a restart");
+    }
+
+    // The static policy mirror must stay aligned with the boot-frozen
+    // service set and its two deny-by-default anchors.
+    #[test]
+    fn boot_policy_covers_all_services_and_denies_by_default() {
+        let policy = policy_json();
+        for name in KNOWN_SERVICES {
+            assert!(policy.contains(name), "policy missing service {name}");
+        }
+        assert!(policy.contains("\"name\":\"fault_demo\",\"caps\":[]"));
+        assert!(policy.contains("\"name\":\"faulty_task\",\"caps\":[]"));
+        // v1.5 decision: nobody holds mmio_write (docs/31 §10).
+        assert!(!policy.contains("mmio_write"));
+        assert!(policy.contains("not live cap-table telemetry"));
     }
 }

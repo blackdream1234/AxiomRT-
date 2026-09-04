@@ -1,5 +1,6 @@
 <!doctype html>
-<!-- AxiomRT Studio dashboard shell (AXIOM-STUDIO-001..009, docs/24).
+<!-- AxiomRT Studio — control & observability console shell
+     (AXIOM-STUDIO-001, docs/37; earlier dashboard: docs/24).
      Served embedded by studio/src/main.rs; no external assets. -->
 <html lang="en">
 <head>
@@ -35,20 +36,23 @@
     font: 14px/1.5 system-ui, sans-serif; display: flex; min-height: 100vh;
   }
   nav {
-    width: 190px; flex: none; border-right: 1px solid var(--border);
+    width: 200px; flex: none; border-right: 1px solid var(--border);
     padding: 14px 0; background: var(--surface);
   }
   nav h1 { font-size: 15px; margin: 0 16px 12px; }
   nav h1 small { display: block; color: var(--ink-3); font-weight: 400; font-size: 11px; }
+  nav .group { margin: 12px 16px 3px; font-size: 10px; letter-spacing: .08em;
+    color: var(--ink-3); text-transform: uppercase; }
   nav a {
-    display: block; padding: 6px 16px; color: var(--ink-2);
+    display: block; padding: 5px 16px; color: var(--ink-2);
     text-decoration: none; border-left: 3px solid transparent;
   }
   nav a.active { color: var(--ink); border-left-color: var(--accent); background: var(--bg); }
-  main { flex: 1; padding: 20px 24px; max-width: 1100px; }
+  main { flex: 1; padding: 20px 24px; max-width: 1150px; }
   section { display: none; }
   section.active { display: block; }
   h2 { font-size: 16px; margin: 0 0 4px; }
+  h3 { font-size: 14px; margin: 0 0 8px; }
   .sub { color: var(--ink-3); font-size: 12px; margin: 0 0 14px; }
   .card {
     background: var(--surface); border: 1px solid var(--border);
@@ -70,6 +74,7 @@
   }
   button:disabled { opacity: .45; cursor: default; }
   button.secondary { background: var(--chip-bg); color: var(--ink); border: 1px solid var(--border); }
+  button.danger { background: var(--crit-bg); color: var(--crit-ink); border: 1px solid var(--crit-ink); }
   .chip {
     display: inline-block; padding: 1px 9px; border-radius: 999px;
     font-size: 12px; background: var(--chip-bg); color: var(--chip-ink);
@@ -77,26 +82,53 @@
   .chip.ok      { background: var(--good-bg); color: var(--good-ink); }
   .chip.running { background: var(--warn-bg); color: var(--warn-ink); }
   .chip.failed  { background: var(--crit-bg); color: var(--crit-ink); }
-  .kv { display: grid; grid-template-columns: 220px 1fr; gap: 4px 12px; font-size: 13px; }
+  .chip.live    { background: var(--good-bg); color: var(--good-ink); }
+  .chip.replay  { background: var(--warn-bg); color: var(--warn-ink); }
+  .kv { display: grid; grid-template-columns: 230px 1fr; gap: 4px 12px; font-size: 13px; }
   .kv .k { color: var(--ink-3); }
   .note { color: var(--ink-3); font-size: 12px; }
+  .warnnote { color: var(--warn-ink); font-size: 12px; }
   .filelist a { color: var(--accent); cursor: pointer; margin-right: 10px; }
+  .scen { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; }
+  .scen .item {
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+    display: flex; align-items: center; gap: 10px; justify-content: space-between;
+  }
+  .scen .item.fault { border-color: var(--crit-ink); background: var(--row-alert); }
+  .scen .meta { min-width: 0; }
+  .scen .meta code { font-size: 12px; color: var(--ink-3); display: block; }
+  input[type=text], select {
+    background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 9px; font-size: 13px;
+  }
+  ol.guide { padding-left: 20px; }
+  ol.guide li { margin-bottom: 9px; }
+  svg text { fill: var(--ink-2); font: 11px system-ui, sans-serif; }
+  svg rect { fill: var(--chip-bg); stroke: var(--border); rx: 5; }
+  svg line { stroke: var(--ink-3); stroke-width: 1.2; }
 </style>
 </head>
 <body data-palette="none — no chart series on this page; status chips carry text labels">
 <nav>
-  <h1>AxiomRT Studio<small>local dashboard — evaluation evidence</small></h1>
-  <a href="/" data-p="home">Status</a>
-  <a href="/run" data-p="run">Run demo</a>
+  <h1>AxiomRT Studio<small>control &amp; observability console</small></h1>
+  <div class="group">Operate</div>
+  <a href="/" data-p="home">Overview</a>
+  <a href="/session" data-p="session">Live session</a>
+  <a href="/scenarios" data-p="scenarios">Demo scenarios</a>
+  <a href="/run" data-p="run">Demo run</a>
+  <div class="group">Observe</div>
   <a href="/tasks" data-p="tasks">Tasks</a>
-  <a href="/scheduler" data-p="scheduler">Scheduler</a>
-  <a href="/faults" data-p="faults">Faults</a>
-  <a href="/ipc" data-p="ipc">IPC</a>
+  <a href="/services" data-p="services">Services</a>
   <a href="/capabilities" data-p="capabilities">Capabilities</a>
+  <a href="/ipc" data-p="ipc">IPC</a>
   <a href="/drivers" data-p="drivers">Drivers</a>
   <a href="/network" data-p="network">Network</a>
+  <a href="/faults" data-p="faults">Faults</a>
+  <a href="/events" data-p="events">Events</a>
+  <a href="/scheduler" data-p="scheduler">Scheduler</a>
   <a href="/loader" data-p="loader">Loader</a>
-  <a href="/tests" data-p="tests">Tests</a>
+  <div class="group">Evidence</div>
+  <a href="/tests" data-p="tests">Verification</a>
   <a href="/proofs" data-p="proofs">Proofs</a>
   <a href="/evidence" data-p="evidence">Evidence</a>
   <a href="/limitations" data-p="limitations">Limitations</a>
@@ -105,31 +137,130 @@
 <main>
 
 <section data-p="home">
-  <h2>System status</h2>
-  <p class="sub">Host toolchain and job states. AxiomRT is an evaluation-stage system; no certification claim is made.</p>
+  <h2>AxiomRT Control Studio</h2>
+  <p class="sub">RISC-V64 / QEMU virt — emulator-oriented high-assurance research prototype. Host-side console; no certification claim.</p>
   <div class="card"><div class="kv" id="doctor"></div></div>
   <div class="card">
     <div class="kv">
+      <span class="k">Live QEMU session</span><span id="st-session"><span class="chip">idle</span></span>
+      <span class="k">Observation source</span><span class="srcbadge"><span class="chip">none</span></span>
       <span class="k">Full demo run</span><span id="st-demo"><span class="chip">idle</span></span>
       <span class="k">Verification sweep</span><span id="st-verify"><span class="chip">idle</span></span>
+      <span class="k">Fuzz evidence run</span><span id="st-fuzz"><span class="chip">idle</span></span>
       <span class="k">Kit build</span><span id="st-kit"><span class="chip">idle</span></span>
     </div>
+  </div>
+  <div class="card">
+    <h3>Observed system snapshot</h3>
+    <div class="kv">
+      <span class="k">Tasks/services observed</span><span id="ov-tasks">0</span>
+      <span class="k">Contained faults observed</span><span id="ov-faults">0</span>
+      <span class="k">Capability denials observed</span><span id="ov-denials">0</span>
+      <span class="k">Network state</span><span id="ov-net">not observed</span>
+      <span class="k">Latest event</span><span id="ov-last">none</span>
+    </div>
+    <p class="note">Derived from parsed serial events of the selected source. Not direct kernel introspection.</p>
+  </div>
+  <div class="card">
+    <h3>Architecture constants (docs/36 §4 — static, not telemetry)</h3>
+    <div class="kv">
+      <span class="k">Task slots</span><span>16</span>
+      <span class="k">Endpoints</span><span>12</span>
+      <span class="k">Capability slots per task</span><span>9</span>
+      <span class="k">Device objects</span><span>2 (block0 skeleton, net0 synthetic)</span>
+      <span class="k">IPC message bound</span><span>128 bytes</span>
+      <span class="k">Syscall inventory</span><span>1–4, 7–20 implemented; 5/6 recognized stubs (−9); others invalid (−1)</span>
+    </div>
+  </div>
+  <div class="card">
+    <h3>System architecture</h3>
+    <svg viewBox="0 0 720 300" width="100%" role="img" aria-label="AxiomRT layer diagram">
+      <rect x="20"  y="16"  width="200" height="34"/><text x="30" y="38">apps: hello · counter · fault_demo</text>
+      <rect x="250" y="16"  width="210" height="34"/><text x="260" y="38">shell · console · loader</text>
+      <rect x="490" y="16"  width="210" height="34"/><text x="500" y="38">supervisor · logger</text>
+      <rect x="20"  y="86"  width="200" height="34"/><text x="30" y="108">fs_service · storage_service</text>
+      <rect x="250" y="86"  width="210" height="34"/><text x="260" y="108">driver_manager</text>
+      <rect x="490" y="86"  width="210" height="34"/><text x="500" y="108">net_service</text>
+      <rect x="130" y="156" width="240" height="34"/><text x="140" y="178">block_driver_service (U-mode)</text>
+      <rect x="420" y="156" width="240" height="34"/><text x="430" y="178">net_driver_service (U-mode)</text>
+      <rect x="20"  y="226" width="680" height="34"/>
+      <text x="30" y="248">kernel mechanisms: traps · Sv39 · fixed-priority scheduling · bounded IPC · capabilities · fault containment · device MMIO/DMA/IRQ mediation</text>
+      <line x1="120" y1="50" x2="120" y2="86"/><line x1="355" y1="50" x2="355" y2="86"/><line x1="595" y1="50" x2="595" y2="86"/>
+      <line x1="250" y1="120" x2="250" y2="156"/><line x1="540" y1="120" x2="540" y2="156"/>
+      <line x1="250" y1="190" x2="250" y2="226"/><line x1="540" y1="190" x2="540" y2="226"/>
+      <text x="30" y="285" style="fill:var(--ink-3)">All service→service traffic is capability-checked bounded IPC through kernel endpoints. QEMU/RISC-V below the kernel line.</text>
+    </svg>
+  </div>
+</section>
+
+<section data-p="session">
+  <h2>Live QEMU session</h2>
+  <p class="sub">Boots the os_boot kernel interactively under QEMU. The serial log below is the LIVE SYSTEM; commands are issued only from the fixed scenario whitelist.</p>
+  <div class="card">
+    <button id="btn-session-start">Start session</button>
+    <button id="btn-session-stop" class="secondary">Stop (controlled shutdown)</button>
+    <span id="st-session2" style="margin-left:10px"><span class="chip">idle</span></span>
+    <span class="note" style="margin-left:10px">start builds the os_boot kernel first (~10–40 s)</span>
+  </div>
+  <div class="card">
+    <h3>Serial console <span class="srcbadge"></span></h3>
+    <pre id="session-log">no session yet</pre>
+  </div>
+  <div class="card">
+    <h3>Issued commands (this session)</h3>
+    <pre id="session-cmds">none</pre>
+  </div>
+</section>
+
+<section data-p="scenarios">
+  <h2>Demo scenarios</h2>
+  <p class="sub">Every button issues one documented shell command over the live session's serial console — the same commands the QEMU test scripts use. Nothing here bypasses capabilities or adds kernel debug paths.</p>
+  <div class="card" id="scen-gate">
+    <span class="warnnote">Scenario controls need a running live session — start one on the Live session page.</span>
+  </div>
+  <div class="card">
+    <h3>Observe</h3>
+    <div class="scen" id="scen-observe"></div>
+  </div>
+  <div class="card">
+    <h3>Act</h3>
+    <div class="scen" id="scen-action"></div>
+  </div>
+  <div class="card">
+    <h3>Deliberate test faults</h3>
+    <p class="warnnote">These inject intentional faults to demonstrate containment and recovery. They are marked DELIBERATE TEST FAULT in this console; results appear only in the serial log and events — success is never assumed.</p>
+    <div class="scen" id="scen-fault"></div>
+  </div>
+  <div class="card">
+    <h3>Guided demonstration sequence</h3>
+    <p class="note">Follow in order; watch the serial console and the Faults/Events pages after each step.</p>
+    <ol class="guide">
+      <li>Confirm the system is alive: <b>tasks</b>, <b>net status</b>.</li>
+      <li>Normal operation: <b>run hello</b>, then <b>ls</b> and <b>storage info</b>.</li>
+      <li>Synthetic network: <b>net send-test</b>, then <b>net stats</b>.</li>
+      <li>Authority: <b>caps</b>, then <b>run fault_demo</b> — its IPC attempt is denied (CAP_DENIED) and its fault is contained.</li>
+      <li>Survival: <b>tasks</b> — unrelated services keep running.</li>
+      <li>Driver containment: <b>driver fault block</b>, observe with <b>drivers</b>, recover with <b>driver restart block</b>.</li>
+      <li>Network driver containment: <b>net fault</b>, observe <b>net status</b> (driver_down), recover with <b>net restart</b>, confirm counters reset with <b>net stats</b>.</li>
+      <li>Normal operation again: <b>run hello</b>.</li>
+      <li>Finish on the <a href="/tests">Verification</a> page.</li>
+    </ol>
   </div>
 </section>
 
 <section data-p="run">
-  <h2>Full fault-containment demo</h2>
+  <h2>Full fault-containment demo (non-interactive)</h2>
   <p class="sub">Builds the demo_full kernel, boots QEMU for a bounded window, captures the serial evidence (docs/20_FULL_DEMO.md).</p>
   <div class="card">
     <button id="btn-demo">Run full demo</button>
     <span id="st-demo2" style="margin-left:10px"><span class="chip">idle</span></span>
   </div>
   <div class="card">
-    <h2 style="font-size:14px">Terminal output</h2>
+    <h3>Terminal output</h3>
     <pre id="demo-log">no run yet</pre>
   </div>
   <div class="card">
-    <h2 style="font-size:14px">Event timeline</h2>
+    <h3>Event timeline</h3>
     <p class="note" id="timeline-note"></p>
     <table id="timeline"><thead><tr><th>#</th><th>category</th><th>kind</th><th>detail</th></tr></thead><tbody></tbody></table>
   </div>
@@ -137,43 +268,50 @@
 
 <section data-p="tasks">
   <h2>Tasks</h2>
-  <p class="sub">Derived from the last demo run's events (TASK_STARTED / FAULT / RECOVERY_APPLIED).</p>
+  <p class="sub">OBSERVED EVENT STATE reconstructed from serial events (TASK_STARTED / SERVICE / FAULT / TASK_KILLED / TASK_RESTARTED / RECOVERY_APPLIED) — not direct kernel introspection. Source: <span class="srcbadge"></span></p>
   <div class="card"><table id="tasks"><thead><tr><th>task</th><th>last observed state</th></tr></thead><tbody></tbody></table></div>
 </section>
 
-<section data-p="scheduler">
-  <h2>Scheduler</h2>
-  <p class="sub">SCHED selections per task in the last demo run — the critical task must keep being selected after the faulty task is contained.</p>
-  <div class="card"><table id="sched"><thead><tr><th>task</th><th class="num">times selected</th></tr></thead><tbody></tbody></table></div>
+<section data-p="services">
+  <h2>Services</h2>
+  <p class="sub">The boot-frozen U-mode service set (docs/25 §3) with observed lifecycle. "not_observed" means no event mentioned the service in this source — never a claim it is down. Source: <span class="srcbadge"></span></p>
+  <div class="card"><table id="services"><thead><tr><th>service</th><th>observed state</th><th class="num">contained faults</th><th class="num">restarts</th></tr></thead><tbody></tbody></table></div>
 </section>
 
-<section data-p="faults">
-  <h2>Faults</h2>
-  <p class="sub">FAULT / CONTAIN / watchdog events from the last demo run.</p>
-  <div class="card"><table id="faults"><thead><tr><th>#</th><th>kind</th><th>detail</th></tr></thead><tbody></tbody></table></div>
+<section data-p="capabilities">
+  <h2>Capabilities</h2>
+  <p class="sub">Authority is deny-by-default: a task holds exactly what boot policy mints, nothing else.</p>
+  <div class="card">
+    <h3>Boot policy — static architecture model</h3>
+    <p class="note" id="policy-source">loading…</p>
+    <table id="policy"><thead><tr><th>task / service</th><th>capability → object (rights)</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card">
+    <h3>Live observed authority activity <span class="srcbadge"></span></h3>
+    <p class="note">Grant announcements and denial events from parsed serial evidence. The kernel does not export per-slot capability tables at runtime; absence of events is not proof of absence of authority.</p>
+    <table id="obs-caps"><thead><tr><th>#</th><th>kind</th><th>detail</th></tr></thead><tbody></tbody></table>
+  </div>
 </section>
 
 <section data-p="ipc">
   <h2>IPC</h2>
-  <p class="sub">Synchronous bounded copy-based IPC events from the last demo run.</p>
+  <p class="sub">Synchronous bounded copy-based IPC events (delivery, blocking, denials). Endpoint payloads are not displayed. Source: <span class="srcbadge"></span></p>
   <div class="card"><table id="ipc"><thead><tr><th>#</th><th>detail</th></tr></thead><tbody></tbody></table></div>
 </section>
 
-<section data-p="capabilities">
-  <h2>Capability denials</h2>
-  <p class="sub">Deny-by-default enforcement: CAP_DENIED events from the last demo run.</p>
-  <div class="card"><table id="caps"><thead><tr><th>#</th><th>detail</th></tr></thead><tbody></tbody></table></div>
-</section>
-
 <section data-p="drivers">
-  <h2>Driver framework</h2>
-  <p class="sub">Device registration, MMIO/DMA grants and denials, IRQ delivery, and driver lifecycle events (docs/31) from the last run.</p>
+  <h2>Drivers</h2>
+  <p class="sub">U-mode driver services and their kernel-mediated device mechanisms (docs/31). Source: <span class="srcbadge"></span></p>
+  <div class="card">
+    <table id="driver-summary"><thead><tr><th>driver</th><th>device</th><th>observed state</th><th class="num">contained faults</th><th class="num">restarts</th></tr></thead><tbody></tbody></table>
+    <p class="note">block0 is a skeleton block device on a real virtio-mmio window (not a driven virtio device); net0 is a SYNTHETIC NETWORK MODEL — no real Ethernet/TCP/IP.</p>
+  </div>
   <div class="card"><table id="drivers"><thead><tr><th>#</th><th>detail</th></tr></thead><tbody></tbody></table></div>
 </section>
 
 <section data-p="network">
-  <h2>Minimal network service</h2>
-  <p class="sub">Derived NET_* events for the isolated U-mode service/driver path (docs/34).</p>
+  <h2>Network</h2>
+  <p class="sub">Derived NET_* events for the isolated U-mode service/driver path (docs/34). Source: <span class="srcbadge"></span></p>
   <div class="card"><div class="kv">
     <span class="k">Network state</span><span id="net-state">not observed</span>
     <span class="k">TX test packets</span><span id="net-tx">0</span>
@@ -184,40 +322,84 @@
     <span class="k">Last network event</span><span id="net-last">none</span>
   </div></div>
   <div class="card">
-    <p class="note"><strong>Limitations:</strong> v1.7 is a deterministic synthetic 64-byte packet/counter service. It is not real virtio-net or hardware networking and provides no TCP/IP, sockets, DNS, internet, production-network, or certification claim.</p>
+    <p class="note"><strong>SYNTHETIC NETWORKING:</strong> v1.7 is a deterministic synthetic 64-byte packet/counter service. It is not real virtio-net or hardware networking and provides no TCP/IP, sockets, DNS, internet, production-network, or certification claim.</p>
   </div>
   <div class="card"><table id="network-events"><thead><tr><th>#</th><th>detail</th></tr></thead><tbody></tbody></table></div>
 </section>
 
+<section data-p="faults">
+  <h2>Faults &amp; containment</h2>
+  <p class="sub">FAULT / CONTAIN / watchdog / recovery events. Every contained fault must show scope=user and kernel=alive. Source: <span class="srcbadge"></span></p>
+  <div class="card"><div class="kv">
+    <span class="k">Contained faults observed</span><span id="flt-count">0</span>
+    <span class="k">Last faulted task</span><span id="flt-last">none</span>
+    <span class="k">Last containment line</span><span id="flt-contain">none</span>
+    <span class="k">Last recovery</span><span id="flt-recovery">none</span>
+  </div></div>
+  <div class="card"><table id="faults"><thead><tr><th>#</th><th>kind</th><th>detail</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section data-p="events">
+  <h2>Events</h2>
+  <p class="sub">Structured event stream (bounded to the newest 1500 parsed events; raw lines preserved; unknown lines are skipped by the parser, never guessed). Source: <span class="srcbadge"></span></p>
+  <div class="card">
+    <input type="text" id="ev-filter" placeholder="filter text (task, kind, field…)">
+    <select id="ev-cat">
+      <option value="">all categories</option>
+      <option>task</option><option>service</option><option>scheduler</option>
+      <option>syscall</option><option>ipc</option><option>capability</option>
+      <option>fault</option><option>watchdog</option><option>recovery</option>
+      <option>driver</option><option>network</option><option>loader</option>
+      <option>boot</option><option>timer</option>
+    </select>
+    <span class="note" id="ev-count"></span>
+  </div>
+  <div class="card"><table id="events-all"><thead><tr><th>#</th><th>category</th><th>kind</th><th>raw</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section data-p="scheduler">
+  <h2>Scheduler</h2>
+  <p class="sub">SCHED selections per task — after a fault is contained, unrelated tasks must keep being selected. Source: <span class="srcbadge"></span></p>
+  <div class="card"><table id="sched"><thead><tr><th>task</th><th class="num">times selected</th></tr></thead><tbody></tbody></table></div>
+</section>
+
 <section data-p="loader">
   <h2>Restricted app loader</h2>
-  <p class="sub">Storage-backed app image loads and rejections (docs/32): APP_IMAGE loaded / rejected events from the last run.</p>
+  <p class="sub">Storage-backed app image loads and rejections (docs/32): APP_IMAGE events. Source: <span class="srcbadge"></span></p>
   <div class="card"><table id="loader"><thead><tr><th>#</th><th>detail</th></tr></thead><tbody></tbody></table></div>
 </section>
 
 <section data-p="tests">
-  <h2>Test results</h2>
-  <p class="sub">Full sweep: 16 QEMU serial-assertion tests, host suites, Coq models (scripts/verify_all.sh).</p>
+  <h2>Verification</h2>
+  <p class="sub">Host tests, QEMU serial-assertion tests, Coq models, and deterministic fuzz evidence are separate categories; none is a certification claim.</p>
   <div class="card">
+    <h3>Full sweep (16 QEMU tests + host suites + Coq)</h3>
     <button id="btn-verify">Run verification sweep</button>
     <span id="st-verify2" style="margin-left:10px"><span class="chip">idle</span></span>
-    <span class="note" style="margin-left:10px">takes a few minutes</span>
+    <span class="note" style="margin-left:10px">takes several minutes</span>
   </div>
   <div class="card"><pre id="verify-log">loading…</pre></div>
+  <div class="card">
+    <h3>Deterministic fuzz evidence (docs/36)</h3>
+    <p class="note">Runs the ipc, capability, and syscall targets (10,000 cases each, fixed seeds). Exit is non-zero on any KERNEL_INVARIANT_FAILURE. Counters and digests come from the actual run below — nothing is prefilled.</p>
+    <button id="btn-fuzz">Run fuzz evidence</button>
+    <span id="st-fuzz2" style="margin-left:10px"><span class="chip">idle</span></span>
+    <pre id="fuzz-log" style="margin-top:10px">not run in this Studio session</pre>
+  </div>
 </section>
 
 <section data-p="proofs">
   <h2>Proof status</h2>
   <p class="sub">Coq model-level theorems; refinement to the implementation is explicitly TODO.</p>
   <div class="card">
-    <p>Model-level theorems are <strong>proven and compiled</strong> for memory isolation, capability access, and scheduler priority (proofs/coq/). The <strong>model-to-code refinement is not discharged</strong> — that boundary is stated in every proof file and in kit/LIMITATIONS.md, and no claim in this dashboard exceeds it.</p>
+    <p>Model-level theorems are <strong>proven and compiled</strong> for memory isolation, capability access, and scheduler priority (proofs/coq/). The <strong>model-to-code refinement is not discharged</strong> — that boundary is stated in every proof file and in kit/LIMITATIONS.md, and no claim in this console exceeds it.</p>
     <pre id="coq-log">run the verification sweep to see the Coq section</pre>
   </div>
 </section>
 
 <section data-p="evidence">
   <h2>Evidence archive</h2>
-  <p class="sub">Per-version archives: serial transcripts, test logs, tool versions, git commit.</p>
+  <p class="sub">Per-version archives: serial transcripts, test logs, tool versions, git commit. Archived files are REPLAYED EVIDENCE from earlier real runs, not a live system.</p>
   <div class="card filelist" id="evidence-list">loading…</div>
   <div class="card"><pre id="evidence-view">select a file</pre></div>
 </section>
@@ -247,9 +429,10 @@ const esc = (t) => t.replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt
 
 // ---- panel routing (server serves this shell on every page path) ----
 const path = location.pathname;
-const panel = {"/":"home","/run":"run","/tasks":"tasks","/scheduler":"scheduler",
+const panel = {"/":"home","/session":"session","/scenarios":"scenarios","/run":"run",
+  "/tasks":"tasks","/services":"services","/scheduler":"scheduler",
   "/faults":"faults","/ipc":"ipc","/capabilities":"capabilities","/tests":"tests",
-  "/drivers":"drivers","/network":"network","/loader":"loader",
+  "/drivers":"drivers","/network":"network","/loader":"loader","/events":"events",
   "/proofs":"proofs","/evidence":"evidence","/limitations":"limitations",
   "/release":"release"}[path] || "home";
 document.querySelectorAll("section").forEach(s =>
@@ -257,22 +440,42 @@ document.querySelectorAll("section").forEach(s =>
 document.querySelectorAll("nav a").forEach(a =>
   a.classList.toggle("active", a.dataset.p === panel));
 
-// ---- state polling ----
-let lastDemoStatus = null, lastVerifyStatus = null;
 function chip(status) {
-  const cls = {ok:"ok", running:"running", failed:"failed"}[status] || "";
-  const label = {idle:"idle", running:"running…", ok:"PASS", failed:"FAIL"}[status] || status;
-  return `<span class="chip ${cls}">${label}</span>`;
+  const cls = {ok:"ok", running:"running", building:"running", failed:"failed",
+               stopped:"", idle:""}[status] || "";
+  const label = {idle:"idle", running:"running…", building:"building…",
+                 stopped:"stopped", ok:"PASS", failed:"FAIL"}[status] || status;
+  return `<span class="chip ${cls}">${esc(label)}</span>`;
 }
+function sourceBadge(src) {
+  if (src === "live_session") return `<span class="chip live">LIVE SESSION</span>`;
+  if (src === "demo_run") return `<span class="chip replay">DEMO RUN (bounded capture)</span>`;
+  return `<span class="chip">no events yet</span>`;
+}
+function setSourceBadges(src) {
+  document.querySelectorAll(".srcbadge").forEach(el => el.innerHTML = sourceBadge(src));
+}
+
+// ---- state polling ----
+let lastDemoStatus = null, lastVerifyStatus = null, lastFuzzStatus = null;
+let lastSessionStatus = null;
 async function poll() {
   try {
     const st = await (await fetch("/api/state")).json();
     for (const [job, ids] of [["demo",["#st-demo","#st-demo2"]],
                               ["verify",["#st-verify","#st-verify2"]],
+                              ["fuzz",["#st-fuzz","#st-fuzz2"]],
                               ["kit",["#st-kit","#st-kit2"]]]) {
       ids.forEach(id => { const el = $(id); if (el) el.innerHTML = chip(st[job].status); });
     }
-    $("#btn-demo").disabled = $("#btn-verify").disabled = $("#btn-kit").disabled = !!st.busy;
+    ["#st-session","#st-session2"].forEach(id => {
+      const el = $(id); if (el) el.innerHTML = chip(st.session);
+    });
+    $("#btn-demo").disabled = $("#btn-verify").disabled =
+      $("#btn-kit").disabled = $("#btn-fuzz").disabled = !!st.busy;
+    $("#btn-session-start").disabled =
+      !!st.busy || st.session === "running" || st.session === "building";
+    $("#btn-session-stop").disabled = st.session !== "running";
     $("#doctor").innerHTML = st.doctor.map(([k,v]) =>
       `<span class="k">${esc(k)}</span><span>${esc(v)}</span>`).join("");
     if (st.demo.status === "running" || st.demo.status !== lastDemoStatus) {
@@ -283,7 +486,19 @@ async function poll() {
       lastVerifyStatus = st.verify.status;
       loadVerifyLog();
     }
-    setTimeout(poll, st.busy ? 1000 : 4000);
+    if (st.fuzz.status !== lastFuzzStatus || st.fuzz.status === "running") {
+      lastFuzzStatus = st.fuzz.status;
+      if (st.fuzz.status !== "idle") loadFuzzLog();
+    }
+    if (st.session !== "idle") {
+      if (st.session === "running" || st.session !== lastSessionStatus) {
+        loadSession();
+        loadEvents();
+      }
+      lastSessionStatus = st.session;
+    }
+    const busyish = st.busy || st.session === "running" || st.session === "building";
+    setTimeout(poll, busyish ? 1500 : 4000);
   } catch (e) { setTimeout(poll, 4000); }
 }
 
@@ -294,9 +509,67 @@ async function loadDemoLog() {
   pre.scrollTop = pre.scrollHeight;
 }
 
-function rows(tbody, html) { $(tbody + " tbody").innerHTML = html; }
+async function loadFuzzLog() {
+  const t = await (await fetch("/api/fuzz_log")).text();
+  if (t) $("#fuzz-log").textContent = t;
+}
+
+// ---- live session ----
+async function loadSession() {
+  try {
+    const s = await (await fetch("/api/session")).json();
+    renderScenarios(s);
+    const t = await (await fetch("/api/session/log")).text();
+    const pre = $("#session-log");
+    if (pre) {
+      const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+      pre.textContent = t || "no session yet";
+      if (stick) pre.scrollTop = pre.scrollHeight;
+    }
+    const cmds = $("#session-cmds");
+    if (cmds) cmds.textContent = s.commands.length ? s.commands.join("\n") : "none";
+    const gate = $("#scen-gate");
+    if (gate) gate.style.display = s.status === "running" ? "none" : "block";
+    document.querySelectorAll(".scen button").forEach(b =>
+      b.disabled = s.status !== "running" || b.dataset.pending === "1");
+  } catch (e) {}
+}
+
+let scenariosRendered = false;
+function renderScenarios(s) {
+  if (scenariosRendered || !$("#scen-observe")) return;
+  scenariosRendered = true;
+  const box = {observe: $("#scen-observe"), action: $("#scen-action"), fault: $("#scen-fault")};
+  for (const sc of s.scenarios) {
+    const item = document.createElement("div");
+    item.className = "item" + (sc.kind === "fault" ? " fault" : "");
+    item.innerHTML =
+      `<div class="meta"><div>${esc(sc.label)}` +
+      (sc.kind === "fault" ? ` <span class="chip failed">DELIBERATE TEST FAULT</span>` : "") +
+      `</div><code>axiom&gt; ${esc(sc.command)}</code></div>`;
+    const btn = document.createElement("button");
+    btn.textContent = "Send";
+    btn.disabled = true;
+    if (sc.kind === "fault") btn.className = "danger";
+    btn.onclick = async () => {
+      btn.dataset.pending = "1"; btn.disabled = true;
+      try { await fetch(`/api/session/cmd?name=${encodeURIComponent(sc.name)}`, {method:"POST"}); }
+      finally {
+        setTimeout(() => { btn.dataset.pending = "0"; loadSession(); }, 1200);
+      }
+    };
+    item.appendChild(btn);
+    (box[sc.kind] || box.action).appendChild(item);
+  }
+}
+
+// ---- event-derived views ----
+function rows(tbody, html) { const el = $(tbody + " tbody"); if (el) el.innerHTML = html; }
+let allEvents = [];
 async function loadEvents() {
   const d = await (await fetch("/api/events")).json();
+  allEvents = d.events;
+  setSourceBadges(d.source);
   $("#timeline-note").textContent =
     `${d.total} events parsed (${d.skipped} non-event lines skipped)` +
     (d.total > d.shown ? `; timeline shows the first ${d.shown}` : "");
@@ -307,6 +580,9 @@ async function loadEvents() {
     `<td>${esc(detail(e))}</td></tr>`).join(""));
   rows("#tasks", d.tasks.map(([t,s]) =>
     `<tr class="${s==="faulted"||s==="killed" ? "alert" : ""}"><td>${esc(t)}</td><td>${esc(s)}</td></tr>`).join(""));
+  rows("#services", d.services.map(([n,s,f,r]) =>
+    `<tr class="${s==="faulted" ? "alert" : ""}"><td>${esc(n)}</td><td>${esc(s)}</td>` +
+    `<td class="num">${f}</td><td class="num">${r}</td></tr>`).join(""));
   rows("#sched", d.sched.map(([t,n]) =>
     `<tr><td>${esc(t)}</td><td class="num">${n.toLocaleString()}</td></tr>`).join(""));
   const evRows = (cats, cols) => d.events
@@ -316,8 +592,32 @@ async function loadEvents() {
       `</tr>`).join("");
   rows("#faults", evRows(["fault","watchdog"], 3));
   rows("#ipc", evRows(["ipc"], 2));
-  rows("#caps", evRows(["capability"], 2));
   rows("#drivers", evRows(["driver"], 2));
+  rows("#loader", evRows(["loader"], 2));
+  rows("#network-events", evRows(["network"], 2));
+
+  // Fault summary.
+  const faults = d.events.filter(e => e.kind === "FAULT" || e.kind === "TASK_FAULTED");
+  const contain = d.events.filter(e => e.kind === "CONTAIN").pop();
+  const recovery = d.events.filter(e => e.category === "recovery").pop();
+  if ($("#flt-count")) {
+    $("#flt-count").textContent = faults.length;
+    $("#flt-last").textContent = faults.length ? (faults[faults.length-1].fields.task || "?") : "none";
+    $("#flt-contain").textContent = contain ? contain.raw : "none";
+    $("#flt-recovery").textContent = recovery ? recovery.raw : "none";
+  }
+
+  // Observed capability activity: grants + every *_DENIED kind.
+  const capKinds = ["CAP_DENIED","MMIO_DENIED","DMA_DENIED","IRQ_DENIED",
+                    "DEVICE_DENIED","IPC_DENIED","NET_DENIED"];
+  const grants = d.events.filter(e =>
+    (e.kind === "MMIO" || e.kind === "DMA") && e.flags.includes("grant"));
+  const denials = d.events.filter(e => capKinds.includes(e.kind));
+  rows("#obs-caps", grants.concat(denials).sort((a,b) => a.seq-b.seq).map(e =>
+    `<tr class="${e.kind.endsWith("_DENIED") ? "alert" : ""}"><td class="num">${e.seq}</td>` +
+    `<td>${esc(e.kind)}</td><td>${esc(e.raw)}</td></tr>`).join(""));
+
+  // Network card.
   $("#net-state").textContent = d.network.state;
   $("#net-tx").textContent = d.network.tx.toLocaleString();
   $("#net-rx").textContent = d.network.rx.toLocaleString();
@@ -325,13 +625,60 @@ async function loadEvents() {
   $("#net-faults").textContent = d.network.faults.toLocaleString();
   $("#net-restarts").textContent = d.network.restarts.toLocaleString();
   $("#net-last").textContent = d.network.last_event;
-  rows("#network-events", evRows(["network"], 2));
-  rows("#loader", evRows(["loader"], 2));
+
+  // Driver summary rows from services + network view.
+  const svc = Object.fromEntries(d.services.map(([n,s,f,r]) => [n, {s,f,r}]));
+  const blk = svc["block_driver_service"] || {s:"not_observed",f:0,r:0};
+  const net = svc["net_driver_service"] || {s:"not_observed",f:0,r:0};
+  rows("#driver-summary",
+    `<tr><td>block_driver_service</td><td>block0 (skeleton)</td><td>${esc(blk.s)}</td>` +
+    `<td class="num">${blk.f}</td><td class="num">${blk.r}</td></tr>` +
+    `<tr><td>net_driver_service</td><td>net0 (synthetic)</td><td>${esc(net.s)}</td>` +
+    `<td class="num">${net.f}</td><td class="num">${net.r}</td></tr>`);
+
+  // Overview snapshot.
+  if ($("#ov-tasks")) {
+    $("#ov-tasks").textContent = d.tasks.length;
+    $("#ov-faults").textContent = faults.length;
+    $("#ov-denials").textContent = denials.length;
+    $("#ov-net").textContent = d.network.state;
+    $("#ov-last").textContent = d.events.length ? d.events[d.events.length-1].raw : "none";
+  }
+  renderEventTable();
 }
 function detail(e) {
   const flags = e.flags.join(" ");
   const fields = Object.entries(e.fields).map(([k,v]) => `${k}=${v}`).join("  ");
   return (flags ? flags + "  " : "") + fields;
+}
+
+// ---- events page filtering (client-side over the bounded set) ----
+function renderEventTable() {
+  if (!$("#events-all")) return;
+  const text = ($("#ev-filter")?.value || "").toLowerCase();
+  const cat = $("#ev-cat")?.value || "";
+  const filtered = allEvents.filter(e =>
+    (!cat || e.category === cat) &&
+    (!text || e.raw.toLowerCase().includes(text) || e.kind.toLowerCase().includes(text)));
+  $("#ev-count").textContent = `${filtered.length} / ${allEvents.length} shown`;
+  rows("#events-all", filtered.map(e =>
+    `<tr><td class="num">${e.seq}</td><td><span class="chip">${esc(e.category)}</span></td>` +
+    `<td>${esc(e.kind)}</td><td>${esc(e.raw)}</td></tr>`).join(""));
+}
+if ($("#ev-filter")) {
+  $("#ev-filter").oninput = renderEventTable;
+  $("#ev-cat").onchange = renderEventTable;
+}
+
+// ---- boot policy (static architecture model) ----
+async function loadPolicy() {
+  if (!$("#policy")) return;
+  const d = await (await fetch("/api/policy")).json();
+  $("#policy-source").textContent = d.source;
+  rows("#policy", d.services.map(s =>
+    `<tr><td>${esc(s.name)}</td><td>` +
+    (s.caps.length ? s.caps.map(esc).join("<br>") : `<span class="chip">no capabilities (deny-by-default)</span>`) +
+    `</td></tr>`).join(""));
 }
 
 async function loadVerifyLog() {
@@ -367,13 +714,18 @@ const post = (url) => fetch(url, {method: "POST"});
 $("#btn-demo").onclick = () => post("/api/run_demo");
 $("#btn-verify").onclick = () => post("/api/run_verify");
 $("#btn-kit").onclick = () => post("/api/kit_build");
+$("#btn-fuzz").onclick = () => post("/api/run_fuzz");
 $("#btn-check").onclick = releaseCheck;
+$("#btn-session-start").onclick = () => { post("/api/session/start"); };
+$("#btn-session-stop").onclick = () => { post("/api/session/stop"); };
 
 poll();
 loadVerifyLog();
 loadEvidence();
 loadDoc();
-if (panel === "run" || panel === "network") { loadDemoLog(); loadEvents(); }
+loadPolicy();
+loadSession();
+loadEvents();
 </script>
 </body>
 </html>
