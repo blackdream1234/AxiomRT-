@@ -65,7 +65,7 @@ user-fault containment.
 | Resource/interface | Current bound |
 |---|---|
 | Syscall register | 64-bit syscall number and 64-bit arguments |
-| On-target syscall inventory | dispatcher numbers 1–4, 7–20; other numbers must take the invalid-syscall path |
+| On-target syscall inventory | implemented numbers 1–4 and 7–20; recognized-but-not-implemented stubs 5 (`sys_reply`) and 6 (`sys_cap_query`) return `ERR_NOT_IMPLEMENTED` (-9); every other number takes the invalid-syscall path (`ERR_INVALID_SYSCALL`, -1) |
 | IPC message | 128 bytes globally |
 | IPC queueing | one rendezvous state per endpoint; no second sender queue |
 | Endpoint table | 12 endpoints, IDs 0–11 |
@@ -98,9 +98,17 @@ A plan is not a claim that the case already passes.
 
 * **Source/trust boundary:** arbitrary U-mode values in `a7` and argument
   registers cross into the trap/dispatcher boundary.
-* **Bound:** each register is one `u64`; the dispatcher currently consumes
-  syscall numbers 1–4 and 7–20. Numbers 5, 6, and all other values are not
-  current on-target operations.
+* **Bound:** each register is one `u64`. Every number is deterministically
+  in exactly one of three classes (verified against the live dispatch path
+  by AXIOM-ROBUST-005):
+  - **implemented:** 1–4 and 7–20, consumed by the active dispatcher;
+  - **recognized-but-not-implemented:** 5 (`sys_reply`) and 6
+    (`sys_cap_query`). The active dispatcher passes them to the legacy
+    dispatch layer, which acknowledges them as ABI-recognized stubs and
+    returns `ERR_NOT_IMPLEMENTED` (-9). They are **not** invalid numbers
+    and must never alias another operation or mutate any state;
+  - **invalid:** every other value, rejected with `ERR_INVALID_SYSCALL`
+    (-1) and no state change.
 * **Validation/rejection:** dispatch only explicitly recognized numbers.
   Operation-specific indexes, rights, widths, offsets, and states must be
   checked before mutation. Unknown numbers must return the documented
@@ -109,9 +117,79 @@ A plan is not a claim that the case already passes.
   the kernel. A documented illegal-syscall user fault may be contained;
   otherwise the result is `SAFE_REJECT`.
 * **Coverage:** current host tests cover many operation validators and QEMU
-  covers valid trap paths. AXIOM-ROBUST-005 inventories every implemented
-  syscall and tests zero, maxima, `u64::MAX`, bad indexes, and invalid
-  lifecycle states; AXIOM-ROBUST-013 covers true U-mode adversarial calls.
+  covers valid trap paths. AXIOM-ROBUST-005 inventories every syscall
+  number and tests zero, maxima, `u64::MAX`, bad indexes, and invalid
+  lifecycle states (section 5.1.1); AXIOM-ROBUST-013 covers true U-mode
+  adversarial calls.
+
+#### 5.1.1 Implemented host coverage (AXIOM-ROBUST-005)
+
+The `axiom-fuzz` `syscall` target reuses the shared generator, engine,
+result accounting, deterministic artifact, and exact-byte replay path.
+Each case holds at most 16 operations, executes twice from fresh state,
+and must produce identical counters and final state (SYS-INV-015).
+Host-reachable panics are caught and reported as SYS-INV-016 failures.
+
+`SYSCALL_INVENTORY` in `tools/axiom-fuzz/src/targets/syscall.rs` is the
+checked three-class inventory of all 20 recognized ABI numbers; its tests
+fail if a number changes class, if 1–20 stop being fully recognized, or if
+any probed number outside the inventory is not invalid. Adding a runtime
+syscall without updating the inventory therefore fails the test suite.
+For stub numbers 5/6 the target verifies deterministic
+`ERR_NOT_IMPLEMENTED`, no capability/endpoint/task/device mutation, no
+partial operation, and no aliasing onto an implemented path; both remain
+`SAFE_REJECT`-class outcomes, never invariant failures.
+
+MMIO and DMA bounds decisions are routed through the real host validator
+`kernel::device::access_in_bounds` — the exact function the RISC-V
+dispatcher calls — covering supported widths {1, 2, 4}, width alignment,
+checked `offset + width`, zero-size regions (net0), and `u64::MAX`
+overflow probes against the 0x200-byte MMIO window and 4096-byte modeled
+DMA page. `kernel::ipc::MSG_MAX_BYTES` supplies the 128-byte IPC bound.
+The remaining semantics (fixed-order capability checks over the 9-slot
+tagged runtime array, the `0x200000..0x201000` user stack window, task and
+service lifecycle rules, endpoint rendezvous, IRQ routes, and the
+record-only fault acknowledgement) are a documented host model of the
+private riscv64 dispatcher, exercised with a 56-scenario named boundary
+bank (invalid/stub/implemented numbers, capability slots 0/8/9/`u64::MAX`
+plus empty/revoked/wrong-type/wrong-object/wrong-rights, endpoints
+0/11/12/`u32::MAX`, tasks 0/15/16/`u64::MAX`, services first/last/
+one-beyond/`u64::MAX`, MMIO and DMA first/last-valid/boundary/misaligned/
+bad-width/overflow/direction-mismatch, pointer null/valid/kernel/
+cross-range/overflow, lifecycle start/kill/restart including repeats and
+self-restart, and the four resolved fault-ack cases). SYS-INV-001 through
+SYS-INV-018 enforce total classification, stub and invalid-number
+no-mutation, bounds before indexing, authority before mutation, checked
+arithmetic, no rejected-state change, determinism, and panic-free host
+execution.
+
+Resolved contract decisions recorded by AXIOM-ROBUST-005:
+
+* Syscalls 5/6 are ABI-recognized stubs returning -9. The previous
+  revision of this document wrongly listed them on the invalid-number
+  path; the runtime ABI was not changed — only this document and the
+  robustness inventory were corrected.
+* `sys_fault_ack` (7): the on-target contract is the docs/19 §4
+  record-only acknowledgement (`a1` = decision; 2 = Kill, 1 = Restart,
+  other values are recorded as Escalate; deterministic 0). The
+  docs/04 event-ID/pending-fault contract (`ERR_NO_PENDING_FAULT`)
+  belongs to the host fault-event model (`kernel::fault::wire`) — the
+  on-target one-byte fault notification carries no event ID by design.
+  Inspection found one real runtime defect: every boot policy mints the
+  supervisor's fault-channel capability with the Control right
+  (docs/04's required authority), but the live syscall accepted every
+  caller, letting capability-less tasks forge
+  `RECOVERY_APPLIED` evidence and spam the bounded event ring. The
+  fuzz target encodes the intended authority gate (SYS-INV-017/018);
+  the minimal runtime fix lands separately as AXIOM-ROBUST-005B.
+
+This remains host-model evidence: the target executes no RISC-V trap
+frame, SATP/address-space switch, SUM-mediated copy, or the private
+runtime `valid_user_buf`/`in_readable_window`/`in_stack_window`
+validators, and it emits no `CONTAINED_USER_FAULT` because no real U-mode
+trap occurs. Null/kernel/unmapped/cross-page pointers against the real
+MMU, true U-mode adversarial calls, and the runtime 9-slot capacity proof
+remain assigned to AXIOM-ROBUST-013 and AXIOM-ROBUST-011.
 
 ### 5.2 User pointers and lengths
 

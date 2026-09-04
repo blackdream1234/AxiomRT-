@@ -4,6 +4,7 @@ use axiom_fuzz::limits::{MAX_INPUT_LEN, MAX_ITERATIONS};
 use axiom_fuzz::targets::capability::{self, CapabilityTarget};
 use axiom_fuzz::targets::ipc::{self, IpcTarget};
 use axiom_fuzz::targets::smoke::{self, SmokeTarget};
+use axiom_fuzz::targets::syscall::{self, SyscallTarget};
 use axiom_fuzz::{Corpus, Engine, FailureArtifact, RunConfig};
 use std::env;
 use std::io;
@@ -15,7 +16,7 @@ axiom-fuzz — deterministic bounded AxiomRT fuzz harness
 
 RUN:
     cargo run -p axiom-fuzz --target x86_64-unknown-linux-gnu -- \\
-        --fuzz-target <smoke|ipc|capability> --seed <u64> --iterations <u64> --max-len <usize> \\
+        --fuzz-target <smoke|ipc|capability|syscall> --seed <u64> --iterations <u64> --max-len <usize> \\
         [--corpus <directory>] [--failure-dir <directory>]
 
 REPLAY:
@@ -25,7 +26,7 @@ REPLAY:
 RULES:
     --seed is required; no random or clock-derived default is used.
     max_len must be <= 1048576; iterations must be <= 10000000.
-    Available targets: smoke, ipc, capability.
+    Available targets: smoke, ipc, capability, syscall.
 ";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,10 +72,10 @@ fn execute(arguments: Vec<String>) -> io::Result<u8> {
         } => {
             if !matches!(
                 fuzz_target.as_str(),
-                smoke::NAME | ipc::NAME | capability::NAME
+                smoke::NAME | ipc::NAME | capability::NAME | syscall::NAME
             ) {
                 return Err(invalid_input(format!(
-                    "unknown fuzz target {fuzz_target:?}; available targets: smoke, ipc, capability"
+                    "unknown fuzz target {fuzz_target:?}; available targets: smoke, ipc, capability, syscall"
                 )));
             }
             let corpus = match corpus {
@@ -95,6 +96,7 @@ fn execute(arguments: Vec<String>) -> io::Result<u8> {
                 }
                 ipc::NAME => Engine.run(&config, corpus, &mut IpcTarget)?,
                 capability::NAME => Engine.run(&config, corpus, &mut CapabilityTarget)?,
+                syscall::NAME => Engine.run(&config, corpus, &mut SyscallTarget)?,
                 _ => unreachable!("target validated above"),
             };
             print!("{}", summary.render());
@@ -106,6 +108,7 @@ fn execute(arguments: Vec<String>) -> io::Result<u8> {
                 smoke::NAME => Engine.replay(&artifact, &mut SmokeTarget)?,
                 ipc::NAME => Engine.replay(&artifact, &mut IpcTarget)?,
                 capability::NAME => Engine.replay(&artifact, &mut CapabilityTarget)?,
+                syscall::NAME => Engine.replay(&artifact, &mut SyscallTarget)?,
                 _ => {
                     return Err(invalid_input(format!(
                         "no implementation is registered for replay target {:?}",
