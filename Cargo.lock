@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "axiom-fuzz"
+version = "0.1.0"
+
+[[package]]
 name = "axiomctl"
 version = "0.1.0"
 

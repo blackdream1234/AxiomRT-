@@ -406,6 +406,50 @@ an explicit deep mode. Every discovered failure receives a minimized,
 checked-in deterministic regression input before the fix is considered
 complete.
 
+### 6.1 Deterministic host harness (AXIOM-ROBUST-002)
+
+The reusable host-only harness is the zero-dependency `axiom-fuzz` crate
+under `tools/axiom-fuzz`. It uses the fixed SplitMix64 algorithm as a
+testing PRNG; this is not cryptographic randomness. A run requires an explicit
+seed and never consults OS randomness, wall-clock time, threads, or the
+network. For fixed target, seed, iteration count, `max_len`, and corpus
+contents, cases are generated in the same order and the printed FNV-1a digest
+is identical.
+
+The only AXIOM-ROBUST-002 target is `smoke`. It validates the harness using
+empty, boundary, generated-byte, bit/insert, and corpus-derived cases without
+calling AxiomRT runtime logic:
+
+```sh
+cargo run -p axiom-fuzz --target x86_64-unknown-linux-gnu -- \
+  --fuzz-target smoke --seed 20260903 --iterations 1000 --max-len 128
+```
+
+Optional `--corpus <directory>` loads only direct regular-file children in
+sorted filename order. An empty directory is valid. Files above `max_len`
+are rejected, not silently truncated; entry count and total retained corpus
+bytes are also capped. Generated inputs never exceed `max_len`. The harness
+hard-caps `max_len` at 1 MiB, one invocation at 10,000,000 iterations,
+corpus count at 4096 files, and retained corpus data at 16 MiB.
+
+A `KERNEL_INVARIANT_FAILURE` stops generation, exits non-zero, and writes a
+timestamp-independent text artifact beneath
+`fuzz_failures/<target>/seed-<seed>-iteration-<iteration>.txt`. The artifact
+records target, seed, iteration, exact input hex and length, mutation, corpus
+origin, and reason. Replay loads the stored bytes directly rather than
+regenerating them:
+
+```sh
+cargo run -p axiom-fuzz --target x86_64-unknown-linux-gnu -- \
+  --replay fuzz_failures/smoke/seed-20260903-iteration-0.txt
+```
+
+CI smoke runs use a small fixed iteration count. Larger local campaigns remain
+explicit and bounded by their command line. Deep-mode policy, protocol
+targets, minimized checked-in regression corpora, and final `verify_all`
+integration belong to later AXIOM-ROBUST tasks. Passing this harness is
+robustness evidence for the exercised cases, never proof of correctness.
+
 ## 7. Reproducibility and evidence rules
 
 * No hidden seed, clock-derived seed, internet corpus, or nondeterministic
