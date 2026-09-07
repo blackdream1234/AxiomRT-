@@ -4,6 +4,7 @@ use axiom_fuzz::limits::{MAX_INPUT_LEN, MAX_ITERATIONS};
 use axiom_fuzz::targets::capability::{self, CapabilityTarget};
 use axiom_fuzz::targets::fs::{self, FsTarget};
 use axiom_fuzz::targets::ipc::{self, IpcTarget};
+use axiom_fuzz::targets::loader::{self, LoaderTarget};
 use axiom_fuzz::targets::smoke::{self, SmokeTarget};
 use axiom_fuzz::targets::storage::{self, StorageTarget};
 use axiom_fuzz::targets::syscall::{self, SyscallTarget};
@@ -18,7 +19,7 @@ axiom-fuzz — deterministic bounded AxiomRT fuzz harness
 
 RUN:
     cargo run -p axiom-fuzz --target x86_64-unknown-linux-gnu -- \\
-        --fuzz-target <smoke|ipc|capability|syscall|storage|fs> --seed <u64> --iterations <u64> --max-len <usize> \\
+        --fuzz-target <smoke|ipc|capability|syscall|storage|fs|loader> --seed <u64> --iterations <u64> --max-len <usize> \\
         [--corpus <directory>] [--failure-dir <directory>]
 
 REPLAY:
@@ -28,7 +29,7 @@ REPLAY:
 RULES:
     --seed is required; no random or clock-derived default is used.
     max_len must be <= 1048576; iterations must be <= 10000000.
-    Available targets: smoke, ipc, capability, syscall, storage, fs.
+    Available targets: smoke, ipc, capability, syscall, storage, fs, loader.
 ";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,10 +81,11 @@ fn execute(arguments: Vec<String>) -> io::Result<u8> {
                     | syscall::NAME
                     | storage::NAME
                     | fs::NAME
+                    | loader::NAME
             ) {
                 return Err(invalid_input(format!(
                     "unknown fuzz target {fuzz_target:?}; available targets: \
-                     smoke, ipc, capability, syscall, storage, fs"
+                     smoke, ipc, capability, syscall, storage, fs, loader"
                 )));
             }
             let corpus = match corpus {
@@ -107,6 +109,7 @@ fn execute(arguments: Vec<String>) -> io::Result<u8> {
                 syscall::NAME => Engine.run(&config, corpus, &mut SyscallTarget)?,
                 storage::NAME => Engine.run(&config, corpus, &mut StorageTarget)?,
                 fs::NAME => Engine.run(&config, corpus, &mut FsTarget)?,
+                loader::NAME => Engine.run(&config, corpus, &mut LoaderTarget)?,
                 _ => unreachable!("target validated above"),
             };
             print!("{}", summary.render());
@@ -121,6 +124,7 @@ fn execute(arguments: Vec<String>) -> io::Result<u8> {
                 syscall::NAME => Engine.replay(&artifact, &mut SyscallTarget)?,
                 storage::NAME => Engine.replay(&artifact, &mut StorageTarget)?,
                 fs::NAME => Engine.replay(&artifact, &mut FsTarget)?,
+                loader::NAME => Engine.replay(&artifact, &mut LoaderTarget)?,
                 _ => {
                     return Err(invalid_input(format!(
                         "no implementation is registered for replay target {:?}",

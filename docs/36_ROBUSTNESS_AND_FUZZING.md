@@ -567,7 +567,70 @@ and it is recorded here rather than silently normalised away.
   loader QEMU test cover representative good and bad records.
   AXIOM-ROBUST-007 mutates every field, integer boundary, name, trailing
   byte, capability request, and load/unload cycle with pinned regression
-  corpus entries.
+  corpus entries (section 5.9.1).
+
+#### 5.9.1 Implemented host coverage (AXIOM-ROBUST-007)
+
+The `axiom-fuzz` `loader` target models the docs/32 §6 AXAPP1
+validation contract in the order `ld_validate` actually applies it, and
+the docs/33 §7 fetch path is routed through this crate's `fs` model so
+the `/bin` record vocabulary has one source of truth. Two properties
+make it more than a re-implementation:
+
+* mapping admission is decided by the **real** kernel host API
+  `kernel::loader::admit_image_mapping`. LD-INV-005 requires that every
+  record the loader accepts describes a layout the kernel mapping
+  mechanism would itself admit — entry inside text, bounded image, one
+  stack page, span entirely below `KERNEL_BASE`, W^X by separation. A
+  validator that drifted looser than the mechanism would fail here.
+* an independent field-splitting oracle re-derives the verdict for every
+  record, so a *wrong verdict* — not only a crash — is an invariant
+  failure (LD-INV-002).
+
+The remaining invariants: LD-INV-001 record and transport bounds (a
+record over 64 bytes never reaches the validator, because `ld_fetch`
+receives into 64); LD-INV-003 **no partial install** — a rejected record
+leaves the loader's state, grants and start counters byte-identical;
+LD-INV-004 no authority beyond per-app policy, and an unload drops the
+grant; LD-INV-006 the checksum cannot be bypassed and does not certify
+grammar; LD-INV-007 lifecycle legality; LD-INV-008 deterministic replay;
+LD-INV-009 no host-reachable panic; LD-INV-010 an unknown name can never
+produce a valid verdict.
+
+A named 40-scenario bank pins the three canonical records, the three
+static `/bin` fixtures, magic/version corruption, record lengths 12, 13,
+64 and 65, every checksum failure mode (wrong digit, uppercase hex,
+non-hex, three digits, missing separator), every layout boundary
+(`entry == text`, `entry > text`, `entry = u64::MAX`, `text = 0`,
+`text` at and over 65536, `rodata` over 65536, `stack` 0 and 2,
+`image != text + rodata`, `image` over 131072), the capability
+vocabulary including an excessive request by `fault_demo`, and the
+structural cases missing field, extra field, double space and trailing
+byte. Every case also runs one of eight lifecycle sequences:
+`load → state → unload → load`, duplicate load, unload when absent, run
+before load, reload after exit, reload after fault, invalid-then-valid
+load of the same app, and mapping-admission probes at the policy edges.
+
+Six pinned corpus entries live in `tools/axiom-fuzz/corpus/loader/`
+(layout boundaries, capability policy, mapping admission, record
+mutations, lifecycle mix, name vocabulary). The directory holds raw
+input bytes only — `Corpus::load` takes every regular file in the
+directory, so no README may be placed there. Use it with
+`--corpus tools/axiom-fuzz/corpus/loader`.
+
+Resolved contract question: docs/32 §6 previously numbered the checks
+with the field grammar before the checksum, but `ld_validate` verifies
+the checksum first and documents why ("so a corrupt record never drives
+the parser"). The runtime order is intentional and strictly safer — the
+only observable difference is that a record which is both malformed and
+mis-checksummed answers `ERR bad_checksum` — so docs/32 §6 was corrected
+to state the implemented order. No runtime change was made.
+
+This is host-model evidence for loader policy. It does not execute the
+live U-mode service, its IPC, or a real address-space construction; the
+restricted-loader QEMU test remains the evidence for the live
+load/run/reject path, and this task extended it with the duplicate-load,
+unload-when-absent, run-before-load and unknown-app probes.
 
 ### 5.10 Driver commands and device mechanisms
 

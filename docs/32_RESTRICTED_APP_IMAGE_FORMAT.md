@@ -80,15 +80,25 @@ arbiter).
 
 ## 6. Loader validation rules
 
-Checks run in fixed order; the first failure answers and stops:
+Checks run in fixed order; the first failure answers and stops. The
+order below is the implemented one (corrected by AXIOM-ROBUST-007: the
+checksum is verified **before** any field parsing, so a corrupt record
+never drives the parser; an earlier revision of this list numbered the
+fields before the checksum, which did not match `ld_validate`). For a
+record that is both malformed and mis-checksummed the answer is
+therefore `ERR bad_checksum`.
 
 1. record length ≥ minimum and ≤ 64 bytes (transport already bounds it);
 2. magic is `AXAPP`, version is `1` → else `ERR bad_image`;
-3. all nine fields present and numeric fields parse → else
+3. checksum: 16-bit additive sum of every record byte except the
+   trailing 5 (` ` + 4 hex digits), rendered as 4 **lowercase** hex
+   digits, must equal the checksum field → else `ERR bad_checksum`; a
+   missing separating space or a non-lowercase-hex tail is
    `ERR malformed`;
-4. checksum: 16-bit additive sum of every record byte except the
-   trailing 5 (` ` + 4 hex digits), rendered as 4 lowercase hex
-   digits, must equal the checksum field → else `ERR bad_checksum`;
+4. all nine fields present, single-space separated, numeric fields
+   parse (at most 19 digits, docs/29 §4), the record name equals the
+   requested name (else `ERR bad_image`), and the image-size field ends
+   exactly where the checksum tail begins → else `ERR malformed`;
 5. layout: `image_size == text_size + rodata_size`, sizes within
    bounds (text ≤ 65536, rodata ≤ 65536, image ≤ 131072, text > 0),
    `entry_offset < text_size`, `stack_pages == 1` (v1.6 policy) →

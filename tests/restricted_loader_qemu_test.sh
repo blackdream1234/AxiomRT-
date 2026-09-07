@@ -39,6 +39,19 @@ echo "booting QEMU (scripted loader session)"
     sleep 1
     printf 'app load invalid_bad_cap\r'
     sleep 1
+    # AXIOM-ROBUST-007 lifecycle probes: duplicate load, unload when
+    # absent, run before load, and state of an unknown app must each
+    # answer deterministically without disturbing a loaded app.
+    printf 'app load counter\r'
+    sleep 1
+    printf 'app unload counter\r'
+    sleep 1
+    printf 'app unload counter\r'
+    sleep 1
+    printf 'run loaded counter\r'
+    sleep 1
+    printf 'app state nosuchapp\r'
+    sleep 1
     printf 'app load fault_demo\r'
     sleep 1
     printf 'run loaded fault_demo\r'
@@ -96,6 +109,14 @@ expect "APP_IMAGE rejected=invalid_bad_checksum reason=bad_checksum"
 expect "ERR bad_checksum"
 expect "APP_IMAGE rejected=invalid_bad_cap reason=denied_capability"
 expect "ERR denied_capability"
+
+# AXIOM-ROBUST-007 lifecycle rules (docs/32 §6, docs/33 §7): a second
+# load of a live app, an unload of an app that is not loaded, a run
+# before load, and any operation on an unknown app are each refused
+# with their documented bounded error — never silently accepted.
+expect "ERR already_loaded"
+expect "ERR not_loaded"
+expect "ERR not_found"
 
 # 7./8./9. load + run fault_demo is contained (LOAD-012); shell alive.
 expect "OK loaded fault_demo"
