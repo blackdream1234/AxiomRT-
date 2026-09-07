@@ -50,6 +50,19 @@ Requests → replies:
   the service (`ERR denied` is reserved: the kernel's capability check
   fails such requests closed before delivery)
 
+Numeric fields accept **at most 19 decimal digits** (AXIOM-ROBUST-006B).
+Nineteen nines is below `u64::MAX`, so a number within that budget can
+never overflow the parser; a longer one is `ERR malformed` even when
+leading zeros would make its value small. The limit is a digit count
+rather than a value comparison because a 64-bit comparison constant is
+materialised out of kernel `.rodata`, which sectioned U-mode code must
+never reference (docs/25 §2). Before this rule the parser wrapped, so
+`READ block=18446744073709551616` answered with block 0's content.
+
+A zero-length request is consumed and produces **no reply**: the service
+loops on `r <= 0`. No in-tree client sends one; a client that did would
+wait for a reply that never arrives.
+
 No dynamic allocation anywhere (constrained rules, docs/25 §2).
 
 ## 5. Capability model (AXIOM-STOR-005)

@@ -24,6 +24,12 @@ echo "booting QEMU (scripted storage session)"
     sleep 1
     printf 'storage read abc\r'
     sleep 1
+    # AXIOM-ROBUST-006B: overflowing block numbers must not wrap into a
+    # valid block (2^64 previously answered with block 0's content).
+    printf 'storage read 18446744073709551616\r'
+    sleep 1
+    printf 'storage read 99999999999999999999999999\r'
+    sleep 1
     printf 'cat /storage/version\r'
     sleep 1
     printf 'caps\r'
@@ -56,6 +62,24 @@ expect "OK block_size=48 blocks=8 readonly=true"
 expect "OK data=AXSTOR v1 blocks=8 bs=48 ro=1"
 expect "ERR bad_block"
 expect "ERR malformed"
+
+# AXIOM-ROBUST-006B: checked decimal parsing. `storage read 0` above
+# prints block 0's content exactly once; the two overflow probes must
+# not add another occurrence, and each must answer ERR malformed.
+alias_hits=$(grep -c "OK data=AXSTOR v1 blocks=8 bs=48 ro=1" "$LOG")
+if [ "$alias_hits" -eq 1 ]; then
+    echo "ok: overflowing block numbers did not alias block 0"
+else
+    echo "MISSING: overflow aliased block 0 ($alias_hits block-0 replies, expected 1)"
+    fail=1
+fi
+malformed_hits=$(grep -c "ERR malformed" "$LOG")
+if [ "$malformed_hits" -ge 3 ]; then
+    echo "ok: non-numeric and both overflowing reads answered ERR malformed"
+else
+    echo "MISSING: expected >=3 ERR malformed replies, found $malformed_hits"
+    fail=1
+fi
 
 # shell -> fs -> storage -> fs -> shell chain (docs/29 §7).
 expect "OK data=AxiomRT v1.6"

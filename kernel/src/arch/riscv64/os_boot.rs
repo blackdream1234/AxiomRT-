@@ -1715,27 +1715,59 @@ fn block_reply(qp: *mut u8, n: u64) {
     }
 }
 
+/// Maximum decimal digits accepted. Nineteen nines
+/// (9_999_999_999_999_999_999) is below `u64::MAX`, so a number of at
+/// most this many digits can never overflow, and a longer one always
+/// takes the rejection path — no wide comparison constant is needed.
+/// A small immediate keeps this out of kernel .rodata (see below).
+const DEC_MAX_DIGITS: usize = 19;
+
 /// Parse decimal digits from `from`; returns (value, index after the
-/// digits) or u64::MAX when no digit is present. Bounded. Manual range
-/// check: no core calls in U-mode (file header rules).
+/// digits) or u64::MAX when no digit is present **or the number is
+/// longer than `DEC_MAX_DIGITS` digits** (AXIOM-ROBUST-006B).
+///
+/// The accumulation used to wrap, which silently turned an out-of-range
+/// number into a valid-looking small one: `READ block=18446744073709551616`
+/// wrapped to 0 and storage_service answered with block 0's real content,
+/// and an absurd AXAPP1 size field could wrap into a value that passes
+/// the docs/32 §6 layout range checks. Both callers already treat
+/// `u64::MAX` as "not a number", so an over-long input now takes their
+/// existing malformed path unchanged.
+///
+/// The bound is a digit count, not a value comparison, deliberately: a
+/// 64-bit comparison constant is materialised by LLVM as a pc-relative
+/// constant-pool load out of kernel `.rodata`, which U-mode must never
+/// reference (docs/25 §2 — this bit storage_service again during
+/// AXIOM-ROBUST-006B with a page fault at stval≈0xf088). Consequence:
+/// a number written with more than 19 digits is rejected even when
+/// leading zeros would make its value small. Every real field is far
+/// below the limit (blocks 0-7, sizes <= 131072).
+///
+/// Bounded. Manual range check: no core calls in U-mode (file header
+/// rules).
 #[allow(clippy::manual_range_contains)]
 #[link_section = ".user.text"]
 #[inline(never)]
 fn parse_dec_stop(p: *const u8, from: usize, n: usize) -> (u64, usize) {
     let mut v: u64 = 0;
     let mut i = from;
-    let mut any = false;
+    let mut digits = 0usize;
     while i < n {
         // SAFETY: in-bounds read.
         let b = unsafe { read_volatile(p.add(i)) };
         if b < b'0' || b > b'9' {
             break;
         }
-        v = v.wrapping_mul(10).wrapping_add((b - b'0') as u64);
+        if digits < DEC_MAX_DIGITS {
+            v = v.wrapping_mul(10).wrapping_add((b - b'0') as u64);
+        }
+        digits += 1;
         i += 1;
-        any = true;
     }
-    if any {
+    // The digit scan always runs to the first non-digit, so the caller's
+    // trailing-junk check (`end != n`) stays position-exact even when the
+    // value itself is rejected.
+    if digits > 0 && digits <= DEC_MAX_DIGITS {
         (v, i)
     } else {
         (u64::MAX, i)
