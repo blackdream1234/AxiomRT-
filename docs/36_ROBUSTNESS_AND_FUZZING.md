@@ -413,7 +413,42 @@ remain assigned to AXIOM-ROBUST-005, -011, -012, and -014.
 * **Coverage:** current filesystem and restricted-loader QEMU tests cover
   valid and selected invalid paths. AXIOM-ROBUST-006 adds deterministic
   empty/whitespace/NUL/separator/length/boundary mutation and post-reject
-  liveness checks.
+  liveness checks (section 5.7.1).
+
+#### 5.7.1 Implemented host coverage (AXIOM-ROBUST-006)
+
+The `axiom-fuzz` `fs` target models the docs/28 §3/§4 protocol in the
+same prefix order as the live `fs_body`, including the docs/33
+storage-backed `/bin` bridge: `CAT /bin/<app>.app` performs a nested
+storage read through this crate's storage model and strips the
+`OK data=` frame, while `CAT /storage/version` forwards the storage
+reply verbatim — the asymmetry the runtime actually implements.
+
+Correctness is checked differentially. An independent path oracle
+re-derives the expected reply for every request from the documented
+tables, and the model's answer must match byte for byte. FS-INV-001
+bounds the transport (64-byte request window; replies bounded by the
+imported `kernel::ipc::MSG_MAX_BYTES`, since the `/bin` listing is 103
+bytes); FS-INV-002/003 require exact listing and file content with no
+aliasing between paths; FS-INV-004 requires that a storage failure
+answers `ERR not_found` and never partial or invented content;
+FS-INV-005 requires deterministic replay; FS-INV-006 forbids
+host-reachable panics. Any violation is `KERNEL_INVARIANT_FAILURE`
+with the usual artifact and exact-byte replay.
+
+A named 32-scenario bank pins every documented path plus unknown,
+relative, trailing-slash, directory-as-file, `..`, case-mutated,
+prefix-extended, NUL-bearing, empty, whitespace-only, 59-byte
+(documented maximum), 60-byte (last fitting) and 65-byte
+(transport-exceeding) requests, and a storage-down/-up cycle proving
+the failure path and its recovery. Remaining input bytes decode into
+further `LS`/`CAT` requests over the known path vocabulary with
+deterministic bit-flip, truncation, NUL-insertion and append mutations,
+plus storage-availability toggles.
+
+This is host-model evidence for the protocol only. The live U-mode
+service, its SUM-gated copies, and the real IPC transport remain
+covered by the filesystem, storage, and restricted-loader QEMU tests.
 
 ### 5.8 Storage protocol
 
@@ -430,7 +465,87 @@ remain assigned to AXIOM-ROBUST-005, -011, -012, and -014.
   survive.
 * **Coverage:** current host parsing helpers and storage QEMU tests cover
   normal geometry and selected malformed cases. AXIOM-ROBUST-006 adds the
-  full numeric/grammar/max-length corpus and liveness after rejection.
+  full numeric/grammar/max-length corpus and liveness after rejection
+  (section 5.8.1), and found one real runtime defect (section 5.8.2).
+
+#### 5.8.1 Implemented host coverage (AXIOM-ROBUST-006)
+
+The `axiom-fuzz` `storage` target models the docs/29 §4 protocol in the
+same order as the live `storage_body`, with the block image mirrored
+byte for byte from the runtime statics. An independent grammar oracle
+re-derives the expected answer for every request; the model must match
+it exactly. STOR-INV-001 bounds the 64-byte request and reply;
+STOR-INV-002 requires exact block content for every in-range read;
+STOR-INV-003 requires the documented error for every malformed or
+out-of-range request; STOR-INV-004 requires checked decimal arithmetic
+(section 5.8.2); STOR-INV-005 requires deterministic replay;
+STOR-INV-006 forbids host-reachable panics; STOR-INV-007 forbids any
+answer that is neither the documented content nor the documented error.
+
+A named 30-scenario bank pins `INFO` (exact and with trailing junk),
+blocks 0/7/8, leading zeros, `u64::MAX`, 2^64, a 26-digit number,
+negative-looking input, missing digits, embedded and trailing junk,
+lowercase opcodes, every `READ_RANGE` boundary (count 0/1/2, overflowing
+start and count, missing and corrupted ` count=` separator), empty,
+whitespace, NUL-bearing and binary requests, a request of exactly 64
+bytes, and one of 65 bytes that the bounded IPC path refuses before the
+service parses anything.
+
+#### 5.8.2 Decimal overflow defect (AXIOM-ROBUST-006B)
+
+`parse_dec_stop` accumulated decimal digits with `wrapping_mul`/
+`wrapping_add` and accepted the wrapped result. A number larger than
+`u64::MAX` therefore wrapped into a valid-looking value: `READ
+block=18446744073709551616` (2^64) wrapped to 0 and the service
+answered with **block 0's real content** instead of an error — a
+wrong-answer defect, not a rejection defect, reachable from the shell
+as `storage read 18446744073709551616`.
+
+The same helper backs `ld_num_after`, which parses the AXAPP1 record
+fields (`entry`, `text`, `rodata`, `stack`, image size) that
+`ld_validate` range-checks (docs/32 §6 rule 5). A wrapped field value
+could therefore present an absurd size as an accepted small one; the
+record checksum is a plain additive sum and cannot prevent it. The
+current `/bin` records are static, so this second path is not
+user-reachable today, but the validator is specified to treat records
+as untrusted input.
+
+AXIOM-ROBUST-006B fixes this at the root by bounding the **digit
+count**: at most 19 digits are accepted. Nineteen nines
+(9 999 999 999 999 999 999) is below `u64::MAX`, so a number within the
+budget can never overflow, and a longer one returns the existing "not a
+number" sentinel — both callers then take their existing
+`ERR malformed` / `bad_image` path unchanged. All in-range behaviour is
+identical.
+
+The bound is deliberately a digit count rather than a value comparison.
+The first attempt compared against `(u64::MAX - 9) / 10`; LLVM
+materialised that 64-bit constant as a pc-relative load from kernel
+`.rodata`, which sectioned U-mode code must never reference (section 8).
+`storage_service` page-faulted at `stval≈0xf088` on the first live boot
+— the fourth instance of this failure mode in the project, and the
+reason the QEMU test is run for every U-mode change. The consequence of
+the digit rule is that a number written with more than 19 digits is
+rejected even when leading zeros would make its value small; every real
+field is far below the limit (blocks 0–7, sizes ≤ 131072), and the host
+model encodes exactly the same rule.
+
+`tests/storage_service_qemu_test.sh` now probes both overflow forms on
+the live target and asserts that block 0's content appears exactly once
+(from the legitimate `storage read 0`), so a regression that re-aliases
+an out-of-range number fails the suite.
+
+#### 5.8.3 Empty-request behaviour (both protocols)
+
+Cross-checking the models against the runtime showed one further
+difference, in the models rather than the kernel: both services test
+`if r <= 0 { continue }` after receiving, so a **zero-length message is
+consumed and produces no reply at all** — not an `ERR malformed` /
+`ERR bad_path`. The models now represent this as a distinct `Ignored`
+outcome. No in-tree client can send one (every sender writes at least an
+opcode prefix), but a client that did would wait for a reply that never
+arrives; that is a liveness property of the caller, not a kernel fault,
+and it is recorded here rather than silently normalised away.
 
 ### 5.9 Restricted application loader
 
@@ -581,7 +696,7 @@ remain assigned to AXIOM-ROBUST-005, -011, -012, and -014.
 | Capabilities | AXIOM-ROBUST-004 | host adversarial matrix + QEMU denial |
 | Syscall scalars | AXIOM-ROBUST-005 | host validators + QEMU |
 | User pointers | AXIOM-ROBUST-005 / -013 | host boundary tests + dedicated QEMU task |
-| Filesystem/storage | AXIOM-ROBUST-006 | host protocol fuzz + QEMU liveness |
+| Filesystem/storage | AXIOM-ROBUST-006 | host protocol fuzz + QEMU liveness (done: sections 5.7.1, 5.8.1, 5.8.2) |
 | Restricted loader | AXIOM-ROBUST-007 | host field mutation + QEMU corpus |
 | Driver/device | AXIOM-ROBUST-008 | host bounds + QEMU containment |
 | Synthetic network | AXIOM-ROBUST-009 | host protocol fuzz + QEMU recovery |
