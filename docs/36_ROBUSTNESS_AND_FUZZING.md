@@ -819,6 +819,58 @@ targets, minimized checked-in regression corpora, and final `verify_all`
 integration belong to later AXIOM-ROBUST tasks. Passing this harness is
 robustness evidence for the exercised cases, never proof of correctness.
 
+### 6.2 Verification-runner integrity (AXIOM-PLAN-003)
+
+`scripts/verify_all.sh` is itself part of the verification argument: a runner
+that cannot report failure turns every downstream claim into an unchecked
+assertion. AXIOM-PLAN-003 addresses runner integrity only, in this bounded
+scope:
+
+* the final "restore default build" is accounted for in the aggregate result
+  instead of being run with its status and output discarded, so a broken
+  default build can no longer coexist with `VERIFY ALL: PASS`. Its diagnostics
+  stay visible;
+* the existing child-status propagation, the sixteen QEMU suites, the four
+  existing host suites and the Coq step are preserved unchanged;
+* `cargo test -p axiom-fuzz` is executed, so the fuzz host tests are covered;
+* seven bounded smoke campaigns run through the documented CLI — `smoke`,
+  `ipc` and `capability` at seed 20260903, `syscall`, `storage`, `fs` and
+  `loader` at seed 20260904, each 200 iterations at `--max-len 128`, with
+  `loader` additionally seeded from `tools/axiom-fuzz/corpus/loader`. These
+  parameters are this task's operational selection, not a historical claim;
+  failure artifacts are written under `target/axiom-plan-003/fuzz-failures/`;
+* a missing prerequisite (`cargo`, `qemu-system-riscv64`, `coqc`, `timeout`)
+  produces an explicit diagnostic, the terminal line `VERIFY ALL: BLOCKED`
+  and exit status 2 **before any suite runs**. A missing tool is never
+  reported as a pass and never silently skipped;
+* every child command runs under an operational timeout (600 s by default,
+  10 s kill-after grace, overridable through a positive-integer
+  `SUITE_TIMEOUT_S`; an invalid value is rejected before any suite runs). A
+  timeout or forced termination is reported with its status and command and
+  can never yield a pass. This bound is operational scheduling hygiene, not a
+  timing guarantee — see section 9 and AXIOM-ROBUST-013/EVID timing work.
+
+Exit statuses are 0 for a complete successful sweep, 1 for an executed
+verification failure, and 2 for a blocked prerequisite or invalid
+configuration. The terminal strings `VERIFY ALL: PASS` and `VERIFY ALL: FAIL`
+and the `=== <name> ===` section headers are unchanged, because host tools
+consume them.
+
+`tests/verify_all_runner_test.sh` tests the runner itself. It copies the real
+script into an isolated temporary root, verifies the copy is byte-identical,
+and drives it with command stubs on a closed fixture `PATH`, so no real
+`cargo`, QEMU or Coq process runs inside a regression scenario. Stubs record
+their invocations, letting the success scenario assert that every suite,
+host test, campaign, the Coq step and the final build actually executed — an
+omitted step fails the harness. It is run separately and is deliberately not
+invoked from `verify_all.sh` in this task. Its results are evidence about the
+runner's control flow only and are never kernel evidence.
+
+This task does **not** complete AXIOM-ROBUST-015, -016 or -017. The normative
+choice of targets, seeds, iteration counts and corpora for the release sweep,
+the documented deep mode, and the v1.8 evidence archive remain open under
+those tasks.
+
 ## 7. Reproducibility and evidence rules
 
 * No hidden seed, clock-derived seed, internet corpus, or nondeterministic
