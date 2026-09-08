@@ -51,7 +51,7 @@ cd "$REPO_ROOT" 2>/dev/null ||
     setup_failure "cannot change directory to '$REPO_ROOT'"
 
 # Confirm this really is the repository: a silently wrong root must not
-# be allowed to proceed and report sixteen missing suites.
+# be allowed to proceed and report every suite as missing.
 [ -f scripts/verify_all.sh ] && [ -d tests ] ||
     setup_failure "'$REPO_ROOT' does not look like the AxiomRT repository (scripts/verify_all.sh and tests/ expected)"
 
@@ -211,7 +211,8 @@ for t in boot_smoke_test \
          storage_service_qemu_test \
          driver_framework_qemu_test \
          restricted_loader_qemu_test \
-         network_service_qemu_test; do
+         network_service_qemu_test \
+         ipc_payload_ownership_qemu_test; do
     run_qemu "$t"
 done
 

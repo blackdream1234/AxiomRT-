@@ -281,6 +281,19 @@ test remains the evidence for one valid cross-address-space rendezvous; it
 does not prove malformed-pointer safety. Null, kernel, unmapped, overflowing,
 and cross-page pointer cases remain deferred to AXIOM-ROBUST-013.
 
+**Scope limit made explicit (AXIOM-FOUND-001).** The `ipc` target exercises
+`kernel::ipc`, which is a *separate implementation* from the riscv64
+dispatcher. It therefore could not and did not detect the dispatcher's
+payload-ownership defect, in which a single shared staging buffer let one
+send destroy another endpoint's parked message — and let a send that was
+subsequently rejected as busy destroy a parked message on its own endpoint.
+Host-model campaigns on this target are never evidence about `dispatch.rs`.
+The live evidence for dispatcher payload ownership is
+`tests/ipc_payload_ownership_qemu_test.sh`, which drives real `ecall`s
+through the trap path and checks exact received lengths and bytes, plus
+zero-length, maximum-length, oversized rejection, short-receive retry, and
+endpoint reuse after a kill.
+
 ### 5.4 Capability slots, objects, and rights
 
 * **Source/trust boundary:** U-mode supplies only a slot index; it must never
@@ -830,7 +843,7 @@ scope:
   instead of being run with its status and output discarded, so a broken
   default build can no longer coexist with `VERIFY ALL: PASS`. Its diagnostics
   stay visible;
-* the existing child-status propagation, the sixteen QEMU suites, the four
+* the existing child-status propagation, the QEMU suites, the four
   existing host suites and the Coq step are preserved unchanged;
 * `cargo test -p axiom-fuzz` is executed, so the fuzz host tests are covered;
 * seven bounded smoke campaigns run through the documented CLI — `smoke`,
@@ -890,7 +903,12 @@ the *same* invocation rather than to any line that happens to mention a tool:
   individually, because a search for the compiler name is satisfied by any one
   of the three;
 * the final default build together with its `--release` flag;
-* the sixteen QEMU suites and the seven campaigns with their exact parameters.
+* every QEMU suite and the seven campaigns with their exact parameters.
+
+Since AXIOM-FOUND-001 the sweep drives **seventeen** QEMU suites: the
+original sixteen plus `ipc_payload_ownership_qemu_test`, the live
+dispatcher payload-ownership regression. The runner regression fixture
+asserts the same seventeen, so a suite dropped from either side fails.
 
 **Negative controls prove the oracle can reject.** Assertions that have only
 ever been observed passing prove nothing about their sensitivity. Each

@@ -24,6 +24,8 @@ demo_preempt = []
 demo_watchdog = []
 # On-target IPC rendezvous demo (AXIOM-IPCRT, v0.6). Off by default.
 demo_ipc = []
+# Live IPC payload-ownership regression (AXIOM-FOUND-001). Off by default.
+demo_ipc_payload = []
 # On-target capability enforcement demo (AXIOM-CAPRT, v0.7). Off by default.
 demo_cap = []
 # On-target supervisor + logger fault-recovery demo (AXIOM-SUPRT, v0.8).

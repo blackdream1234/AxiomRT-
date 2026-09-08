@@ -73,6 +73,11 @@ mod watchdog_demo;
 #[path = "arch/riscv64/ipc_demo.rs"]
 mod ipc_demo;
 
+// Live IPC payload-ownership regression (AXIOM-FOUND-001, feature-gated).
+#[cfg(all(target_arch = "riscv64", feature = "demo_ipc_payload"))]
+#[path = "arch/riscv64/ipc_payload_demo.rs"]
+mod ipc_payload_demo;
+
 // On-target capability enforcement demo (v0.7, feature-gated).
 #[cfg(all(target_arch = "riscv64", feature = "demo_cap"))]
 #[path = "arch/riscv64/cap_demo.rs"]
@@ -152,7 +157,18 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
         cap_demo::cap_demo()
     }
     #[cfg(all(
+        feature = "demo_ipc_payload",
+        not(feature = "demo_cap"),
+        not(feature = "demo_supervisor"),
+        not(feature = "demo_full"),
+        not(feature = "os_boot")
+    ))]
+    {
+        ipc_payload_demo::ipc_payload_demo()
+    }
+    #[cfg(all(
         feature = "demo_ipc",
+        not(feature = "demo_ipc_payload"),
         not(feature = "demo_cap"),
         not(feature = "demo_supervisor"),
         not(feature = "os_boot")
@@ -162,6 +178,7 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     }
     #[cfg(all(
         feature = "demo_watchdog",
+        not(feature = "demo_ipc_payload"),
         not(feature = "demo_ipc"),
         not(feature = "demo_cap"),
         not(feature = "os_boot")
@@ -171,6 +188,7 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     }
     #[cfg(all(
         feature = "demo_preempt",
+        not(feature = "demo_ipc_payload"),
         not(feature = "demo_watchdog"),
         not(feature = "demo_ipc"),
         not(feature = "demo_cap"),
@@ -181,6 +199,7 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
     }
     #[cfg(all(
         feature = "demo_multitask",
+        not(feature = "demo_ipc_payload"),
         not(feature = "demo_preempt"),
         not(feature = "demo_watchdog"),
         not(feature = "demo_ipc"),
@@ -195,6 +214,7 @@ pub extern "C" fn kernel_main(_hartid: usize, _dtb: usize) -> ! {
         feature = "demo_preempt",
         feature = "demo_watchdog",
         feature = "demo_ipc",
+        feature = "demo_ipc_payload",
         feature = "demo_cap",
         feature = "demo_supervisor",
         feature = "demo_full",

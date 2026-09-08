@@ -286,9 +286,40 @@ enum Ep {
 /// IRQ events (docs/31).
 const NUM_ENDPOINTS: usize = 12;
 static mut ENDPOINTS: [Ep; NUM_ENDPOINTS] = [Ep::Idle; NUM_ENDPOINTS];
-/// Kernel staging buffer for user send→recv copies (bounded, no shared
-/// memory, docs/17 §2).
-static mut KMSG: [u8; IPC_MSG_MAX] = [0; IPC_MSG_MAX];
+/// Pending payload of each endpoint's parked sender (AXIOM-FOUND-001,
+/// docs/17 §2, docs/08 §3 "exactly one in-flight message ... held while
+/// a sender waits"). Slot `i` belongs to endpoint `i` and holds
+/// meaningful bytes only while `ENDPOINTS[i]` is `SenderWaiting`; it is
+/// filled before that state is published and cleared before the
+/// endpoint returns to `Idle`.
+///
+/// A single shared staging buffer was used before: it let a send on one
+/// endpoint destroy another endpoint's parked message, and let a send
+/// that was then rejected as busy destroy the parked message on its own
+/// endpoint — the latter reachable even with one endpoint.
+static mut EP_MSG: [[u8; IPC_MSG_MAX]; NUM_ENDPOINTS] = [[0; IPC_MSG_MAX]; NUM_ENDPOINTS];
+
+/// Borrow one endpoint's payload slot.
+///
+/// The returned borrow is used for a single bounded copy and dropped
+/// before any endpoint state change, so at most one live `&mut` into
+/// `EP_MSG` exists at a time and no reference outlives its statement.
+fn ep_msg_mut(id: u32) -> &'static mut [u8; IPC_MSG_MAX] {
+    // SAFETY: single hart; the dispatcher is the only accessor and runs
+    // in trap context with interrupts masked, never re-entrantly (the
+    // same basis as ENDPOINTS/TASKS). `id` is bounds-checked by the
+    // capability lookup before any call reaches here.
+    unsafe { &mut (*addr_of_mut!(EP_MSG))[id as usize] }
+}
+
+/// Erase an endpoint's payload slot. Called before the endpoint is
+/// published as `Idle`, so a released slot never retains a message.
+fn ep_msg_clear(id: u32) {
+    let slot = ep_msg_mut(id);
+    for byte in slot.iter_mut() {
+        *byte = 0;
+    }
+}
 
 extern "C" {
     fn __enter_user(entry: u64, user_sp: u64, trap_stack_top: u64) -> !;
@@ -417,7 +448,14 @@ fn ep_clear_for_task(slot: usize) {
     let mut id = 0usize;
     while id < NUM_ENDPOINTS {
         match ep_get(id as u32) {
-            Ep::SenderWaiting { tid, .. } | Ep::ReceiverWaiting { tid, .. } if tid == slot => {
+            // A parked sender owns this endpoint's payload slot; release
+            // it before publishing Idle so a reused endpoint can never
+            // expose the dead task's message (AXIOM-FOUND-001).
+            Ep::SenderWaiting { tid, .. } if tid == slot => {
+                ep_msg_clear(id as u32);
+                ep_set(id as u32, Ep::Idle);
+            }
+            Ep::ReceiverWaiting { tid, .. } if tid == slot => {
                 ep_set(id as u32, Ep::Idle);
             }
             _ => {}
@@ -509,23 +547,30 @@ fn valid_user_buf(va: u64, len: usize) -> bool {
             .is_some_and(|end| end <= USER_DATA_END)
 }
 
-/// Copy `len` bytes from the running task's user buffer into KMSG. The
-/// caller must have validated the range and the sender's satp is active.
-fn copy_from_user(va: u64, len: usize) {
+/// Copy `len` bytes from the running task's user buffer into an
+/// explicit kernel-side buffer. The caller must have validated the
+/// range and the sender's satp must be active.
+///
+/// A fault inside this copy is taken in S-mode, so it is NOT a
+/// contained user fault: `TrapFrame::is_from_user()` is false and the
+/// trap handler halts the kernel. This routine therefore guarantees
+/// only that its caller validated the range first; it provides no
+/// recovery from an unexpected fault (docs/17 §5).
+fn copy_from_user_into(dst: &mut [u8], va: u64, len: usize) {
     set_sum();
-    let kmsg = unsafe { &mut *addr_of_mut!(KMSG) };
-    for (i, byte) in kmsg.iter_mut().enumerate().take(len) {
+    for (i, byte) in dst.iter_mut().enumerate().take(len) {
         // SAFETY: validated user range, SUM set, byte-wise volatile read.
         *byte = unsafe { read_volatile((va + i as u64) as *const u8) };
     }
     clear_sum();
 }
 
-/// Copy `len` bytes from KMSG into the running task's user buffer. The
-/// caller must have validated the range and the receiver's satp is active.
-fn copy_to_user(va: u64, len: usize) {
-    let kmsg = unsafe { *addr_of!(KMSG) };
-    copy_bytes_to_user(va, &kmsg[..len]);
+/// Copy `len` bytes from an explicit kernel-side buffer into the
+/// running task's user buffer. The caller must have validated the range
+/// and the receiver's satp must be active. The same S-mode fault
+/// boundary as `copy_from_user_into` applies.
+fn copy_to_user_from(va: u64, src: &[u8], len: usize) {
+    copy_bytes_to_user(va, &src[..len]);
 }
 
 /// Copy an explicit byte slice into the running task's user buffer
@@ -862,15 +907,15 @@ fn ipc_send(frame: &mut TrapFrame) {
         emit("IPC_DENIED op=send reason=bad_buffer task=", cur_name);
         return;
     }
-    // Copy the sender's buffer into the kernel now (sender satp active).
-    copy_from_user(buf, len);
-
+    // The endpoint decides BEFORE anything is copied (AXIOM-FOUND-001):
+    // a send that is rejected as busy must not disturb the payload the
+    // parked sender owns.
     match ep_get(ep_id) {
         Ep::ReceiverWaiting { tid, dst, cap } => {
+            // Receiver-first: the payload goes straight into the waiting
+            // receiver's deferred-delivery buffer; EP_MSG is not used.
             emit("IPC send task=", cur_name);
             uart::put_str("IPC endpoint=log op=send\n");
-            let kmsg = unsafe { *addr_of!(KMSG) };
-            let tasks = tasks_mut();
             if len <= cap && valid_user_buf(dst, len) {
                 // Stage delivery with an embedded payload; the receiver
                 // completes the copy when it next runs (AXIOM-IPCRT-006).
@@ -879,23 +924,35 @@ fn ipc_send(frame: &mut TrapFrame) {
                     len,
                     data: [0; IPC_MSG_MAX],
                 };
-                pm.data[..len].copy_from_slice(&kmsg[..len]);
+                // Sender satp is active here, so read the user buffer
+                // directly into the pending message.
+                copy_from_user_into(&mut pm.data, buf, len);
+                let tasks = tasks_mut();
                 tasks[tid].pending_ipc = Some(pm);
+                tasks[tid].state = RtState::Ready;
             } else {
+                let tasks = tasks_mut();
                 tasks[tid].frame.set_a0(ERR_MSG_TOO_LARGE);
+                tasks[tid].state = RtState::Ready;
             }
-            tasks[tid].state = RtState::Ready;
             ep_set(ep_id, Ep::Idle);
             frame.set_a0(len as i64); // send completes
         }
         Ep::Idle => {
+            // Sender-first: fill this endpoint's slot, then publish
+            // SenderWaiting, so no observable state has SenderWaiting
+            // without its bytes.
+            copy_from_user_into(ep_msg_mut(ep_id), buf, len);
             ep_set(ep_id, Ep::SenderWaiting { tid: cur, len });
             emit("IPC send task=", cur_name);
             uart::put_str("IPC endpoint=log op=send state=blocked\n");
             block_and_switch(frame); // send blocks until a receiver
         }
         Ep::SenderWaiting { .. } => {
-            frame.set_a0(ERR_INVALID_ARG); // one sender only (bounded)
+            // Bounded: one sender only. No copy, no slot write, no
+            // endpoint mutation - only the ABI-required result code and
+            // the denial evidence (docs/04, docs/18).
+            frame.set_a0(ERR_INVALID_ARG);
             emit("IPC_DENIED op=send reason=busy task=", cur_name);
         }
     }
@@ -943,15 +1000,22 @@ fn ipc_recv(frame: &mut TrapFrame) {
     match ep_get(ep_id) {
         Ep::SenderWaiting { tid, len } => {
             if len > cap || !valid_user_buf(dst, len) {
+                // Rejected before any copy: the sender stays parked and
+                // its payload is untouched, so an adequately sized retry
+                // still returns the original bytes (docs/17 §5).
                 frame.set_a0(ERR_INVALID_ARG);
                 emit("IPC_DENIED op=recv reason=bad_buffer task=", cur_name);
                 return;
             }
-            copy_to_user(dst, len);
+            // Receiver satp is active: deliver from this endpoint's slot,
+            // then release the slot before publishing Idle.
+            let slot = ep_msg_mut(ep_id);
+            copy_to_user_from(dst, slot, len);
             frame.set_a0(len as i64);
             let tasks = tasks_mut();
             tasks[tid].state = RtState::Ready; // sender's send completes
             tasks[tid].frame.set_a0(len as i64);
+            ep_msg_clear(ep_id);
             ep_set(ep_id, Ep::Idle);
             emit("IPC recv task=", cur_name);
             uart::put_str("IPC delivered bytes=");

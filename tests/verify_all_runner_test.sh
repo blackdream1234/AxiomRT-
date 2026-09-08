@@ -35,14 +35,15 @@ RUNNER="$REPO_ROOT/scripts/verify_all.sh"
 HOST_TARGET="x86_64-unknown-linux-gnu"
 SUPERVISOR_MANIFEST="userland/supervisor/Cargo.toml"
 
-# The sixteen suites the runner drives (docs/36 section 6.2).
+# The seventeen suites the runner drives (docs/36 sections 6.2/6.2.1;
+# the live IPC payload-ownership suite joined at AXIOM-FOUND-001).
 QEMU_SUITES="boot_smoke_test memory_isolation_qemu_test two_task_qemu_test
 timer_preemption_qemu_test watchdog_qemu_test ipc_rendezvous_qemu_test
 capability_qemu_test supervisor_qemu_test
 full_fault_containment_demo_qemu_test os_shell_qemu_test
 app_loader_qemu_test readonly_fs_qemu_test storage_service_qemu_test
 driver_framework_qemu_test restricted_loader_qemu_test
-network_service_qemu_test"
+network_service_qemu_test ipc_payload_ownership_qemu_test"
 
 # Package-addressed host suites. The supervisor crate is addressed by
 # manifest path instead and is asserted separately.
@@ -432,7 +433,7 @@ scenario_success() {
     AXIOM_STUB_FAIL="" invoke_runner
     expect_status 0 "$s"
     expect_log "VERIFY ALL: PASS" "$s"
-    expect_log "16/16 QEMU tests" "$s"
+    expect_log "17/17 QEMU tests" "$s"
     expect_no_log ">>> FAILED" "$s"
     expect_no_log ">>> TIMEOUT-REPORTED" "$s"
     expect_no_log ">>> KILLED" "$s"
@@ -468,7 +469,7 @@ scenario_child_test_failure() {
     expect_log ">>> FAILED" "$s"
     expect_log "VERIFY ALL: FAIL" "$s"
     expect_no_log "VERIFY ALL: PASS" "$s"
-    expect_log "15/16 QEMU tests" "$s"
+    expect_log "16/17 QEMU tests" "$s"
     scenario_completed=1
 }
 
@@ -476,7 +477,7 @@ scenario_final_build_failure() {
     s="final_build_failure"
     build_fixture "" "" "" "" || return
     AXIOM_STUB_FAIL="final_build" invoke_runner
-    expect_log "16/16 QEMU tests" "$s"
+    expect_log "17/17 QEMU tests" "$s"
     pred_final_build; check $? "$s" "final build was executed"
     expect_status 1 "$s"
     expect_log "VERIFY ALL: FAIL" "$s"

@@ -17,20 +17,41 @@ endpoint without a capability check. No shared memory. Demo behind the
 
 ## 2. Message Buffer and Bound
 
-One bounded message at a time (`IPC_MSG_MAX = 128` bytes (64 before v1.6; raised for the /bin listing, docs/33 §3)) is staged in a
-kernel buffer (`KMSG`). There is no queue and no shared memory: the
-payload is copied sender→kernel and kernel→receiver, so the two tasks
-never alias memory (docs/08 §1).
+A message is bounded at `IPC_MSG_MAX = 128` bytes (64 before v1.6;
+raised for the /bin listing, docs/33 §3). There is no queue and no
+shared memory: the payload is copied sender→kernel and kernel→receiver,
+so the two tasks never alias memory (docs/08 §1).
+
+**Payload ownership (AXIOM-FOUND-001).** A message parked by a blocked
+sender belongs to *its endpoint*, matching the approved model in
+docs/08 §3 ("exactly one in-flight message can exist, held while a
+sender waits"). The dispatcher keeps one bounded slot per endpoint,
+`EP_MSG[NUM_ENDPOINTS][IPC_MSG_MAX]`; slot *i* holds the payload of
+endpoint *i*'s parked sender and is meaningful only while that
+endpoint is `SenderWaiting`.
+
+Earlier revisions staged every message in a single kernel buffer
+(`KMSG`). That was never sound: a second send on the *same* endpoint
+overwrote the parked payload before being rejected as busy, which was
+reachable even with one endpoint. Growing to `NUM_ENDPOINTS = 12`
+added a second failure — a send on any other endpoint overwrote an
+unrelated parked message — but did not create the defect. `KMSG` has
+been removed; the copy helpers now take an explicit kernel-side buffer.
 
 ## 3. Endpoint State
 
-A single demo endpoint (`Ep`):
+Endpoint state (`Ep`), one instance per endpoint (`NUM_ENDPOINTS = 12`):
 
 ```text
 Idle
-SenderWaiting   { tid, len }        sender parked, message staged in KMSG
+SenderWaiting   { tid, len }        sender parked; bytes in EP_MSG[ep][0..len]
 ReceiverWaiting { tid, dst, cap }   receiver parked, awaiting a sender
 ```
+
+The payload slot is filled **before** `SenderWaiting` is published and
+cleared **before** the endpoint returns to `Idle`, so no observable
+state has `SenderWaiting` without its bytes, and no released slot
+retains a previous message.
 
 ## 4. User Buffer Validation (AXIOM-IPCRT-002/003)
 
@@ -44,20 +65,44 @@ set only for the duration of a validated copy, then cleared).
 
 ## 5. Rendezvous (AXIOM-IPCRT-004..009)
 
+Validation precedence is unchanged and every check completes **before
+any byte is copied**: capability with the required right, then
+`len > IPC_MSG_MAX` → `ERR_MSG_TOO_LARGE`, then buffer range →
+`ERR_INVALID_ARG`, then the endpoint state decides.
+
 `sys_send(a1=buf, a2=len)`:
 
-* endpoint `Idle` → copy sender buffer into KMSG, park sender
-  (`SenderWaiting`, state Blocked), switch away — **send blocks if no
-  receiver**;
-* endpoint `ReceiverWaiting` → copy sender buffer into KMSG, stage a
-  deferred delivery on the receiver, wake it (Ready), sender continues.
+* endpoint `Idle` (**sender-first**) → copy sender buffer into
+  `EP_MSG[ep]`, then park the sender (`SenderWaiting`, state Blocked)
+  and switch away — **send blocks if no receiver**;
+* endpoint `ReceiverWaiting` (**receiver-first**) → copy sender buffer
+  directly into the waiting receiver's deferred-delivery buffer, wake
+  it (Ready), sender continues. `EP_MSG` is not used on this path;
+* endpoint `SenderWaiting` → `ERR_INVALID_ARG` (busy). **No copy is
+  performed**, so the parked payload, the endpoint state and every
+  unrelated task are unaffected. As required by docs/04 the caller's
+  `a0` is set and an `IPC_DENIED` event is emitted; those are the only
+  observable changes.
 
 `sys_recv(a1=buf, a2=cap)`:
 
 * endpoint `Idle` → validate buffer, park receiver (`ReceiverWaiting`,
   state Blocked), switch away — **receive blocks if no sender**;
-* endpoint `SenderWaiting` → copy KMSG into the receiver's buffer
-  (receiver satp active), return length, wake the sender.
+* endpoint `SenderWaiting` with `len > cap` → `ERR_INVALID_ARG`; the
+  sender **stays parked** and its payload is untouched, so an
+  adequately sized retry still returns the original bytes;
+* endpoint `SenderWaiting` → copy `EP_MSG[ep][0..len]` into the
+  receiver's buffer (receiver satp active), clear the slot, return the
+  length, wake the sender.
+
+**User-copy fault boundary.** The SUM-gated copies run in S-mode, so
+`TrapFrame::is_from_user()` is false for a fault taken inside them: the
+containment path in the trap handler does not apply and the kernel
+halts with `PANIC … reason=kernel_page_fault`. This design guarantees
+only that **validation rejects before any copy begins**; it provides no
+recovery from an unexpected fault during a copy, and none is claimed. A
+recoverable-copy mechanism would need a trap-path fixup and is proposed
+separately, not implemented here.
 
 **Deferred delivery (AXIOM-IPCRT-006):** when a send finds a waiting
 receiver, the receiver is not currently running (its satp is inactive),
