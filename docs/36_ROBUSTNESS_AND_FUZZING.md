@@ -871,6 +871,71 @@ choice of targets, seeds, iteration counts and corpora for the release sweep,
 the documented deep mode, and the v1.8 evidence archive remain open under
 those tasks.
 
+#### 6.2.1 Acceptance corrections (AXIOM-PLAN-005)
+
+An acceptance review of the runner-integrity change found that the sweep's
+own completeness oracle was weaker than the change claimed, and that two
+runner checks drew conclusions the evidence did not support. The corrections
+below close those gaps. The seeds, iteration counts, corpora and the
+production fuzz-failure path selected earlier are unchanged.
+
+**Invocation accounting now checks semantics, not labels.** The stubs emit one
+normalised record per invocation, so every assertion binds its attributes to
+the *same* invocation rather than to any line that happens to mention a tool:
+
+* the four package-based host suites, each with its host target;
+* the supervisor suite by its exact manifest path *and* host target — it
+  carries no `-p` flag, so a package-name check could never have covered it;
+* each of `MemoryIsolation.v`, `CapabilityAccess.v` and `SchedulerPriority.v`
+  individually, because a search for the compiler name is satisfied by any one
+  of the three;
+* the final default build together with its `--release` flag;
+* the sixteen QEMU suites and the seven campaigns with their exact parameters.
+
+**Negative controls prove the oracle can reject.** Assertions that have only
+ever been observed passing prove nothing about their sensitivity. Each
+accounting predicate is now paired with a control that deletes exactly the
+invocation it is meant to require — the supervisor suite, each Coq unit, and
+the required target, manifest and release arguments. A control mutates only a
+clearly labelled temporary copy; the production runner is never modified and
+the ordinary scenarios continue to run a byte-identical copy. Every control
+verifies that its mutation actually took effect and that the mutated copy is
+still syntactically valid, because a syntax error or an unrelated failure is
+not evidence that an accounting oracle works.
+
+**Setup faults stop before any workload.** Repository-root resolution, the
+directory change, the repository markers and the failure-directory creation
+are each checked. Any failure prints an explicit diagnostic, `VERIFY ALL:
+BLOCKED`, and exits 2 with no suite, host test, campaign, Coq compilation or
+build having run — and the preflight scenarios assert that absence across all
+of those, not only the QEMU suites.
+
+**Timeout grammar.** `SUITE_TIMEOUT_S` accepts a canonical decimal integer in
+`1..86400`; unset means 600 seconds; explicitly empty is invalid. Signs,
+non-digits, over-long strings and leading zeros are rejected, and the grammar
+and length are validated before any numeric comparison so an oversized value
+cannot reach shell arithmetic. Rejecting leading zeros is a chosen canonical
+form, not a claim about how any previous version evaluated such a value. The
+kill-after grace remains 10 seconds.
+
+**Reported status is separated from inferred cause.** A non-zero outcome
+always fails the aggregate gate. Status 124 is reported as the timeout
+utility's own indication that the command exceeded the limit, without
+asserting an independently established root cause. Status 137 is reported as
+a `SIGKILL` with the cause *undetermined*: it can arise from the kill-after
+grace, the out-of-memory killer or an external signal, and the number alone
+does not distinguish them.
+
+**Harness integrity.** Every fixture-creation step required for safe execution
+is checked. A failed `mktemp` aborts before anything derived from that path is
+written, so no absolute system path can be touched. Scenario completion is
+tracked, so a setup failure cannot silently skip a scenario while the harness
+still reports success, and cleanup may remove only a directory this harness
+created and validated.
+
+These remain runner-control results. They say nothing about kernel behaviour,
+and AXIOM-ROBUST-015, -016 and -017 remain incomplete.
+
 ## 7. Reproducibility and evidence rules
 
 * No hidden seed, clock-derived seed, internet corpus, or nondeterministic

@@ -4,28 +4,66 @@
 # deterministic fuzz smoke campaigns, and the Coq model compilations,
 # then restores the default build. Intended for evaluators and CI.
 #
-# Requirement reference: docs/36_ROBUSTNESS_AND_FUZZING.md section 6.2
-# (AXIOM-PLAN-003 runner integrity). The runner's own regression test is
+# Requirement reference: docs/36_ROBUSTNESS_AND_FUZZING.md sections 6.2
+# and 6.2.1 (AXIOM-PLAN-003 runner integrity, AXIOM-PLAN-005 acceptance
+# corrections). The runner's own regression test is
 # tests/verify_all_runner_test.sh, run separately.
 #
 # Usage: ./scripts/verify_all.sh
 # Exit:  0 = everything passed
 #        1 = an executed verification failed
-#        2 = a prerequisite is missing or the configuration is invalid
+#        2 = setup, configuration or prerequisite rejection
 #            (nothing was executed)
 
 set -u
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$REPO_ROOT"
+# ---------------------------------------------------------------------
+# Setup. Every step that later work depends on is checked, so a broken
+# environment is reported as such instead of being misattributed to a
+# suite (AXIOM-PLAN-005). Nothing below runs any workload.
+# ---------------------------------------------------------------------
+
+setup_failure() {
+    echo ">>> SETUP FAILURE: $1"
+    echo ""
+    echo "VERIFY ALL: BLOCKED"
+    exit 2
+}
+
+config_failure() {
+    echo ">>> INVALID CONFIG: $1"
+    echo ""
+    echo "VERIFY ALL: BLOCKED"
+    exit 2
+}
+
+SCRIPT_DIR="$(dirname "$0" 2>/dev/null)" ||
+    setup_failure "cannot determine the script directory from '$0'"
+[ -n "$SCRIPT_DIR" ] ||
+    setup_failure "the script directory resolved empty from '$0' (is 'dirname' available?)"
+
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd)" ||
+    setup_failure "cannot resolve the repository root from '$SCRIPT_DIR/..'"
+[ -n "$REPO_ROOT" ] ||
+    setup_failure "the repository root resolved empty from '$SCRIPT_DIR/..'"
+
+cd "$REPO_ROOT" 2>/dev/null ||
+    setup_failure "cannot change directory to '$REPO_ROOT'"
+
+# Confirm this really is the repository: a silently wrong root must not
+# be allowed to proceed and report sixteen missing suites.
+[ -f scripts/verify_all.sh ] && [ -d tests ] ||
+    setup_failure "'$REPO_ROOT' does not look like the AxiomRT repository (scripts/verify_all.sh and tests/ expected)"
 
 # ---------------------------------------------------------------------
-# Configuration (AXIOM-PLAN-003)
+# Configuration
 # ---------------------------------------------------------------------
 
 # Operational per-child timeout. This bounds scheduling, it is NOT a
 # timing guarantee about AxiomRT (docs/36 section 9).
-SUITE_TIMEOUT_S="${SUITE_TIMEOUT_S:-600}"
+SUITE_TIMEOUT_MIN=1
+SUITE_TIMEOUT_MAX=86400
+SUITE_TIMEOUT_S="${SUITE_TIMEOUT_S-600}"
 TIMEOUT_KILL_AFTER_S=10
 
 # Bounded fuzz smoke parameters. Deep campaigns stay out of the default
@@ -34,25 +72,30 @@ FUZZ_SMOKE_ITERATIONS=200
 FUZZ_SMOKE_MAX_LEN=128
 FUZZ_FAILURE_DIR="target/axiom-plan-003/fuzz-failures"
 LOADER_CORPUS="tools/axiom-fuzz/corpus/loader"
+COQ_UNITS="MemoryIsolation.v CapabilityAccess.v SchedulerPriority.v"
 
-fail=0
-qemu_pass=0
-qemu_total=0
-
-# Reject an invalid timeout override before any suite runs.
+# Timeout grammar: a canonical decimal integer in 1..86400. Grammar and
+# length are checked before any numeric comparison, so an oversized
+# value can never reach shell arithmetic.
 case "$SUITE_TIMEOUT_S" in
-    ''|*[!0-9]*)
-        echo ">>> INVALID CONFIG: SUITE_TIMEOUT_S must be a positive integer (got '$SUITE_TIMEOUT_S')"
-        echo ""
-        echo "VERIFY ALL: BLOCKED"
-        exit 2
+    '')
+        config_failure "SUITE_TIMEOUT_S must not be empty (expected an integer ${SUITE_TIMEOUT_MIN}..${SUITE_TIMEOUT_MAX}, or unset for 600)"
+        ;;
+    *[!0-9]*)
+        config_failure "SUITE_TIMEOUT_S must contain digits only (got '$SUITE_TIMEOUT_S'; expected ${SUITE_TIMEOUT_MIN}..${SUITE_TIMEOUT_MAX})"
         ;;
 esac
-if [ "$SUITE_TIMEOUT_S" -le 0 ]; then
-    echo ">>> INVALID CONFIG: SUITE_TIMEOUT_S must be a positive integer (got '$SUITE_TIMEOUT_S')"
-    echo ""
-    echo "VERIFY ALL: BLOCKED"
-    exit 2
+if [ "${#SUITE_TIMEOUT_S}" -gt 5 ]; then
+    config_failure "SUITE_TIMEOUT_S is too long (got ${#SUITE_TIMEOUT_S} digits; expected ${SUITE_TIMEOUT_MIN}..${SUITE_TIMEOUT_MAX})"
+fi
+case "$SUITE_TIMEOUT_S" in
+    0*)
+        config_failure "SUITE_TIMEOUT_S must be written without leading zeros (got '$SUITE_TIMEOUT_S'; expected ${SUITE_TIMEOUT_MIN}..${SUITE_TIMEOUT_MAX})"
+        ;;
+esac
+if [ "$SUITE_TIMEOUT_S" -lt "$SUITE_TIMEOUT_MIN" ] ||
+   [ "$SUITE_TIMEOUT_S" -gt "$SUITE_TIMEOUT_MAX" ]; then
+    config_failure "SUITE_TIMEOUT_S is out of range (got '$SUITE_TIMEOUT_S'; expected ${SUITE_TIMEOUT_MIN}..${SUITE_TIMEOUT_MAX})"
 fi
 
 # ---------------------------------------------------------------------
@@ -79,9 +122,21 @@ if [ "$missing" -ne 0 ]; then
     exit 2
 fi
 
+# The fuzz failure directory is part of setup: create it before any
+# workload so a failure here cannot surface after a full suite run.
+mkdir -p "$FUZZ_FAILURE_DIR" 2>/dev/null ||
+    setup_failure "cannot create the fuzz failure directory '$FUZZ_FAILURE_DIR'"
+[ -d "$FUZZ_FAILURE_DIR" ] ||
+    setup_failure "the fuzz failure directory '$FUZZ_FAILURE_DIR' does not exist after creation"
+
+fail=0
+qemu_pass=0
+qemu_total=0
+
 # ---------------------------------------------------------------------
 # Execution helpers. Every child runs under the operational timeout and
-# every non-zero status reaches the aggregate result.
+# every non-zero outcome reaches the aggregate result. Reported status
+# is kept distinct from inferred cause (AXIOM-PLAN-005).
 # ---------------------------------------------------------------------
 
 run_cmd() {
@@ -93,11 +148,23 @@ run_cmd() {
     if [ "$status" -eq 0 ]; then
         return 0
     fi
-    if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-        echo ">>> TIMEOUT after ${SUITE_TIMEOUT_S}s (status $status): $*"
-    else
-        echo ">>> FAILED (status $status): $*"
-    fi
+    case "$status" in
+        124)
+            # 124 is the timeout utility's own indication that the limit
+            # was reached. It is not an independently established root
+            # cause for why the command was slow.
+            echo ">>> TIMEOUT-REPORTED (status 124): the timeout utility reported that the command exceeded ${SUITE_TIMEOUT_S}s: $*"
+            ;;
+        137)
+            # 128+SIGKILL. This can come from the kill-after grace, the
+            # out-of-memory killer, or an external signal; the number
+            # alone does not distinguish them.
+            echo ">>> KILLED (status 137, SIGKILL; cause not determined - may be the kill-after grace, the OOM killer or an external signal): $*"
+            ;;
+        *)
+            echo ">>> FAILED (status $status): $*"
+            ;;
+    esac
     fail=1
     return 1
 }
@@ -115,9 +182,8 @@ run() {
     run_cmd "$label" "$@"
 }
 
-# One bounded deterministic smoke campaign. Seeds and counts are this
-# task's operational selection (docs/36 section 6.2), not a historical
-# claim. Extra arguments are appended verbatim.
+# One bounded deterministic smoke campaign. Seeds and counts are an
+# operational selection (docs/36 section 6.2), not a historical claim.
 run_fuzz() {
     fuzz_target="$1"
     fuzz_seed="$2"
@@ -149,17 +215,15 @@ for t in boot_smoke_test \
     run_qemu "$t"
 done
 
-# Host test suites.
+# Host test suites. The supervisor crate is addressed by manifest path,
+# not by package name, so it is kept on one line for exact accounting.
 run "kernel host tests" cargo test --target x86_64-unknown-linux-gnu -p kernel
 run "axiomctl host tests" cargo test --target x86_64-unknown-linux-gnu -p axiomctl
-run "supervisor host tests" \
-    cargo test --manifest-path userland/supervisor/Cargo.toml \
-    --target x86_64-unknown-linux-gnu
+run "supervisor host tests" cargo test --manifest-path userland/supervisor/Cargo.toml --target x86_64-unknown-linux-gnu
 run "studio host tests" cargo test --target x86_64-unknown-linux-gnu -p studio
 run "axiom-fuzz host tests" cargo test --target x86_64-unknown-linux-gnu -p axiom-fuzz
 
 # Bounded deterministic fuzz smoke campaigns (docs/36 section 6.2).
-mkdir -p "$FUZZ_FAILURE_DIR"
 run_fuzz smoke 20260903
 run_fuzz ipc 20260903
 run_fuzz capability 20260903
@@ -168,11 +232,9 @@ run_fuzz storage 20260904
 run_fuzz fs 20260904
 run_fuzz loader 20260904 --corpus "$LOADER_CORPUS"
 
-# Coq model compilation.
-run "coq models" sh -c 'cd proofs/coq && \
-    coqc MemoryIsolation.v && \
-    coqc CapabilityAccess.v && \
-    coqc SchedulerPriority.v'
+# Coq model compilation. Each unit is compiled in turn; the first
+# failure stops the step.
+run "coq models" sh -c 'cd proofs/coq && for unit in '"$COQ_UNITS"'; do coqc "$unit" || exit 1; done'
 
 # Restore default build. Its status is part of the aggregate result and
 # its diagnostics stay visible (AXIOM-PLAN-003): a broken default build
