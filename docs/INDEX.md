@@ -32,6 +32,7 @@
 | [34_NETWORK_SERVICE.md](34_NETWORK_SERVICE.md) | v1.7 | Minimal user-space network architecture and bounded protocol |
 | [35_VIRTIO_NET_INVESTIGATION.md](35_VIRTIO_NET_INVESTIGATION.md) | v1.7 | QEMU/virtio-net transport investigation and synthetic-path decision |
 | [36_ROBUSTNESS_AND_FUZZING.md](36_ROBUSTNESS_AND_FUZZING.md) | v1.8 | Threat surfaces, failure classes, bounds, containment rules, and fuzz coverage plan |
+| [22_PRODUCT_PROFILE_AND_ASSURANCE.md](22_PRODUCT_PROFILE_AND_ASSURANCE.md) | v1.8 | DRAFT — owner review required: bounded evaluation profile, assets, threat model, hazards, decision and evidence registers |
 
 File names above follow the task pack verbatim (numbering overlaps are
 intentional and preserved).
